@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { 
   Loader2, 
@@ -13,7 +12,6 @@ import {
   Shield
 } from 'lucide-react'
 import { useSearchParams } from 'next/navigation'
-import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +22,8 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Stepper, StepContent, type Step } from '@/components/ui/stepper'
 import { useToast } from '@/components/ui/use-toast'
+import { RampButton } from '@/components/ramp/ramp-button'
+import { getConfig } from '@/config/env'
 import { PolicyAPI, PolicyError, getPolicyErrorMessage, getExplorerUrl } from '@/lib/api/policy'
 import { QuoteAPI, QuoteError, getQuoteErrorMessage } from '@/lib/api/quote'
 import { PolicyInitiationSchema, PolicyInitiationData, Transaction, Policy } from '@/lib/schemas/policy'
@@ -37,6 +37,7 @@ interface PolicyInitiationProps {
 
 export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps) {
   const { toast } = useToast()
+  const { rampEnabled, apiUrl } = getConfig()
   const searchParams = useSearchParams()
   const quoteId = propQuoteId || searchParams.get('quoteId') || ''
   
@@ -49,6 +50,8 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
   const [walletConnected, setWalletConnected] = useState(false)
   const [walletAddress, setWalletAddress] = useState('')
   const [txStatus, setTxStatus] = useState('')
+  const [showOnRamp, setShowOnRamp] = useState(false)
+  const [rampUrl, setRampUrl] = useState<string | null>(null)
   const stepHeadingRef = useRef<HTMLHeadingElement>(null)
 
   const {
@@ -121,6 +124,30 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
     }
   }, [quoteId, toast])
 
+  useEffect(() => {
+    if (!rampEnabled || !showOnRamp) return;
+
+    let cancelled = false;
+    const fetchRampUrl = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/ramp/config`);
+        if (!response.ok) return;
+        const data = (await response.json()) as { url?: string };
+        if (!cancelled && data.url) {
+          setRampUrl(data.url);
+        }
+      } catch {
+        // on-ramp load failure must not block policy flow
+      }
+    };
+
+    void fetchRampUrl();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl, rampEnabled, showOnRamp]);
+
   const connectWallet = async () => {
     try {
       const mockAddress = 'GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ123456'
@@ -156,6 +183,9 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
     } catch (error) {
       const msg = error instanceof PolicyError ? getPolicyErrorMessage(error) : 'Policy initiation failed.'
       setTxStatus(`Error: ${msg}`)
+      if (error instanceof PolicyError && error.code === 'INSUFFICIENT_BALANCE') {
+        setShowOnRamp(true)
+      }
       if (error instanceof PolicyError) {
         toast({ title: 'Policy Error', description: msg, variant: 'destructive' })
       }
@@ -371,6 +401,19 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
                     </div>
                   </div>
                 </div>
+
+                {showOnRamp && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
+                    <p className="mb-3 text-sm font-medium">
+                      Insufficient balance detected. You can buy XLM or supported stablecoins and retry.
+                    </p>
+                    {rampUrl ? (
+                      <RampButton rampUrl={rampUrl} />
+                    ) : (
+                      <p className="text-xs">Loading on-ramp options...</p>
+                    )}
+                  </div>
+                )}
 
                 {/* Sticky CTA on mobile */}
                 <div className="sticky-action-bar bg-background/95 backdrop-blur-sm border-t pt-3 -mx-6 px-6 sm:static sm:border-0 sm:bg-transparent sm:backdrop-blur-none sm:pt-0 sm:mx-0 sm:px-0">

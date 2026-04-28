@@ -4,13 +4,18 @@ import { X, Upload, FileText, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import React, { useState, useCallback } from 'react';
 
 import { Button, Progress, Label } from '@/components/ui';
-import { uploadFileWithProgress, UploadProgress } from '@/lib/ipfs-upload';
+import {
+  computeFileSha256Hex,
+  uploadFileWithProgress,
+  UploadProgress,
+} from '@/lib/ipfs-upload';
 
 interface FileUploadState {
   file: File;
   progress: number;
-  status: 'pending' | 'uploading' | 'completed' | 'error';
+  status: 'pending' | 'hashing' | 'uploading' | 'completed' | 'error';
   url?: string;
+  hash?: string;
   error?: string;
   controller?: AbortController;
 }
@@ -62,10 +67,16 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
     const controller = new AbortController();
     setUploads(prev => ({
       ...prev,
-      [id]: { ...prev[id], status: 'uploading', progress: 0, controller }
+      [id]: { ...prev[id], status: 'hashing', progress: 0, controller, error: undefined }
     }));
 
     try {
+      const contentSha256Hex = await computeFileSha256Hex(upload.file);
+      setUploads(prev => ({
+        ...prev,
+        [id]: { ...prev[id], hash: contentSha256Hex, status: 'uploading' },
+      }));
+
       const response = await uploadFileWithProgress(
         upload.file,
         (p: UploadProgress) => {
@@ -74,17 +85,25 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
             [id]: { ...prev[id], progress: p.percentage }
           }));
         },
-        controller.signal
+        controller.signal,
+        3,
+        contentSha256Hex
       );
 
       const url = response.gatewayUrls[0] || '';
-      const contentSha256Hex = response.contentSha256Hex;
       setUploads(prev => ({
         ...prev,
-        [id]: { ...prev[id], status: 'completed', progress: 100, url }
+        [id]: {
+          ...prev[id],
+          status: 'completed',
+          progress: 100,
+          url,
+          hash: contentSha256Hex,
+        }
       }));
 
-      onChange([...evidence, { url, contentSha256Hex }]);
+      const nextEvidence = evidence.filter((entry) => entry.url !== url);
+      onChange([...nextEvidence, { url, contentSha256Hex }]);
     } catch (err) {
       if (err instanceof Error && err.message === 'Upload aborted') return;
       
@@ -148,6 +167,11 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
                   {upload.status === 'pending' && (
                     <Button size="sm" onClick={() => startUpload(id)}>Upload</Button>
                   )}
+                  {upload.status === 'error' && (
+                    <Button size="sm" variant="outline" onClick={() => startUpload(id)}>
+                      Retry
+                    </Button>
+                  )}
                   {upload.status === 'completed' && (
                     <CheckCircle2 className="h-5 w-5 text-green-500" />
                   )}
@@ -166,6 +190,14 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
                     <span>Uploading...</span>
                     <span>{upload.progress}%</span>
                   </div>
+                </div>
+              )}
+              {upload.status === 'hashing' && (
+                <p className="text-[10px] text-muted-foreground">Computing SHA-256 hash...</p>
+              )}
+              {upload.hash && (
+                <div className="text-[10px] text-muted-foreground font-mono break-all">
+                  SHA-256: {upload.hash}
                 </div>
               )}
             </div>

@@ -49,6 +49,13 @@ export const FAQ_ITEMS: FaqItem[] = [
       'Premiums are calculated on-chain via the Soroban smart contract based on your coverage amount, contract type, risk category, and duration. The quote is valid for a limited time and reflects current risk parameters.',
   },
   {
+    id: 'onramp-insufficient-balance',
+    category: 'Payments',
+    question: 'What happens if I do not have enough balance to pay premium?',
+    answer:
+      'If your wallet has insufficient balance, the app shows a fiat on-ramp option so you can buy XLM or supported stablecoins through a third-party provider, then retry policy initiation. Payment processing and KYC are handled by the provider, not by NiffyInsur.',
+  },
+  {
     id: 'wallet-required',
     category: 'Getting Started',
     question: 'Do I need a Stellar wallet?',

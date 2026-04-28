@@ -12,6 +12,25 @@ export type ProgressCallback = (progress: UploadProgress) => void;
 
 const { apiUrl: API_BASE_URL } = getConfig();
 
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Computes SHA-256 hash of the file bytes in the browser using Web Crypto API.
+ */
+export async function computeFileSha256Hex(file: File): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('Web Crypto API is unavailable in this browser');
+  }
+
+  const fileBuffer = await file.arrayBuffer();
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', fileBuffer);
+  return bytesToHex(new Uint8Array(digest));
+}
+
 /**
  * Uploads a file to IPFS via the backend with progress tracking and retry logic.
  */
@@ -19,7 +38,8 @@ export async function uploadFileWithProgress(
   file: File,
   onProgress?: ProgressCallback,
   abortSignal?: AbortSignal,
-  maxRetries = 3
+  maxRetries = 3,
+  expectedContentSha256Hex?: string
 ): Promise<IpfsUploadResponse> {
   let attempt = 0;
 
@@ -48,6 +68,14 @@ export async function uploadFileWithProgress(
           if (xhr.status >= 200 && xhr.status < 300) {
             try {
               const response = JSON.parse(xhr.responseText);
+              if (
+                expectedContentSha256Hex &&
+                response.contentSha256Hex?.toLowerCase() !== expectedContentSha256Hex.toLowerCase()
+              ) {
+                reject(new Error('Uploaded content hash mismatch'));
+                return;
+              }
+
               resolve(response);
             } catch {
               reject(new Error('Failed to parse upload response'));
