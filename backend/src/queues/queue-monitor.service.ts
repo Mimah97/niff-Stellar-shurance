@@ -35,8 +35,13 @@ export class QueueMonitorService implements OnModuleInit, OnModuleDestroy {
       });
       this.queues.push(q);
 
-      // Listen for failed events to record DLQ metrics with job type + reason
-      q.on('failed' as any, (job: Job | undefined, err: Error) => {
+      // Use a Worker (autorun: false) solely for typed 'failed' event listening.
+      // Queue does not expose a 'failed' event; Worker does.
+      const w = new Worker(cfg.name, undefined, {
+        connection: getBullMQConnection(),
+        autorun: false,
+      });
+      w.on('failed', (job: Job | undefined, err: Error) => {
         if (!job) return;
         const isExhausted = (job.attemptsMade ?? 0) >= DLQ_MAX_ATTEMPTS;
         if (isExhausted) {
@@ -51,6 +56,7 @@ export class QueueMonitorService implements OnModuleInit, OnModuleDestroy {
           );
         }
       });
+      this.workers.push(w);
     }
 
     // Poll DLQ depth every 30 s
