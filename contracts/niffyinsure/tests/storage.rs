@@ -276,14 +276,12 @@ fn full_claim_vote_flow_approve() {
 
     let holder = Address::generate(&env);
     let voter2 = Address::generate(&env);
-    let voter3 = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
         let policy = make_policy(&holder, 1, &token_addr);
         storage::set_policy(&env, &holder, 1, &policy);
         storage::add_voter(&env, &holder);
         storage::add_voter(&env, &voter2);
-        storage::add_voter(&env, &voter3);
     });
 
     let details = String::from_str(&env, "roof collapsed");
@@ -323,14 +321,12 @@ fn full_claim_vote_flow_reject() {
     client.admin_set_quorum_bps(&10_000u32);
     let holder = Address::generate(&env);
     let voter2 = Address::generate(&env);
-    let voter3 = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
         let policy = make_policy(&holder, 1, &token);
         storage::set_policy(&env, &holder, 1, &policy);
         storage::add_voter(&env, &holder);
         storage::add_voter(&env, &voter2);
-        storage::add_voter(&env, &voter3);
     });
 
     let details = String::from_str(&env, "fraudulent claim");
@@ -811,9 +807,7 @@ fn ttl_alert_threshold_management() {
     assert_eq!(threshold, 600_000, "Default threshold should be 600,000");
 
     // Test setting custom threshold
-    client
-        .set_ttl_alert_threshold(&300_000u32)
-        .expect("Admin should set threshold");
+    client.set_ttl_alert_threshold(&300_000u32);
     let threshold = client.get_ttl_alert_threshold();
     assert_eq!(threshold, 300_000, "Threshold should be updated");
 }
