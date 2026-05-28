@@ -22,6 +22,7 @@ import { Keypair, StrKey } from '@stellar/stellar-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import { NonceService } from './nonce.service';
 import { normalizeAddress } from '../common/utils/normalize-address';
+import { RefreshTokenService } from './refresh-token.service';
 
 @Injectable()
 export class WalletAuthService {
@@ -31,6 +32,7 @@ export class WalletAuthService {
     private readonly nonceService: NonceService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   private get domain(): string {
@@ -84,7 +86,7 @@ export class WalletAuthService {
     publicKey: string,
     nonce: string,
     signatureBase64: string,
-  ): Promise<{ token: string; expiresAt: string }> {
+  ): Promise<{ token: string; expiresAt: string; refreshToken: string }> {
     const canonicalKey = normalizeAddress(publicKey);
     if (!StrKey.isValidEd25519PublicKey(canonicalKey)) {
       throw new BadRequestException({
@@ -129,16 +131,37 @@ export class WalletAuthService {
       });
     }
 
-    const ttlSeconds = this.parseTtl(
-      this.configService.get<string>('JWT_EXPIRES_IN', '1h'),
-    );
+    // Access token: 15 minutes (hard-coded; not configurable to prevent accidental extension)
+    const ACCESS_TTL = 15 * 60;
     const now = Math.floor(Date.now() / 1000);
-    // scope='user' — explicitly not admin
-    const payload = { sub: canonicalKey, scope: 'user', iat: now, exp: now + ttlSeconds };
-    const token = this.jwtService.sign(payload);
-    const expiresAt = new Date((now + ttlSeconds) * 1000).toISOString();
+    // scope='user' — explicitly not admin; exp set via signOptions only
+    const payload = { sub: canonicalKey, walletAddress: canonicalKey, scope: 'user', iat: now };
+    const token = this.jwtService.sign(payload, { expiresIn: ACCESS_TTL });
+    const expiresAt = new Date((now + ACCESS_TTL) * 1000).toISOString();
 
-    return { token, expiresAt };
+    const refreshToken = await this.refreshTokenService.issue(canonicalKey);
+
+    return { token, expiresAt, refreshToken };
+  }
+
+  /** Exchange a valid refresh token for a new access + refresh token pair. */
+  async refresh(rawRefreshToken: string): Promise<{ token: string; expiresAt: string; refreshToken: string }> {
+    const walletAddress = await this.refreshTokenService.consume(rawRefreshToken);
+
+    const ACCESS_TTL = 15 * 60;
+    const now = Math.floor(Date.now() / 1000);
+    const payload = { sub: walletAddress, walletAddress, scope: 'user', iat: now };
+    const token = this.jwtService.sign(payload, { expiresIn: ACCESS_TTL });
+    const expiresAt = new Date((now + ACCESS_TTL) * 1000).toISOString();
+
+    const newRefreshToken = await this.refreshTokenService.issue(walletAddress);
+
+    return { token, expiresAt, refreshToken: newRefreshToken };
+  }
+
+  /** Invalidate a refresh token immediately (logout). */
+  async logout(rawRefreshToken: string): Promise<void> {
+    await this.refreshTokenService.revoke(rawRefreshToken);
   }
 
   private parseTtl(ttl: string): number {
