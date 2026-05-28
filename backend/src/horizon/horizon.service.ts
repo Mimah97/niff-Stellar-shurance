@@ -3,8 +3,10 @@ import {
   Logger,
   BadGatewayException,
   BadRequestException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import CircuitBreaker from "opossum";
 import { getNetworkConfig } from "../config/network.config";
 import { filterHorizonOperations } from "./filters/horizon-field.filter";
 import { HorizonTransactionResponse } from "./dto/horizon-transaction.dto";
@@ -15,6 +17,8 @@ const CACHE_PREFIX = "horizon:txcache:";
 const RL_KEY_PREFIX = "horizon:rl:";
 const RL_WINDOW_MS = 60_000;
 const RL_MAX_REQUESTS = 30;
+const HORIZON_CIRCUIT_BREAKER_THRESHOLD = 5;
+const HORIZON_CIRCUIT_BREAKER_RESET_MS = 60_000;
 
 /**
  * Stellar address format: 56 uppercase alphanumeric characters starting with G.
@@ -27,6 +31,9 @@ export class HorizonService {
   private readonly horizonUrl: string;
   private readonly maxRequests: number;
   private readonly windowMs: number;
+  private readonly circuitBreakerThreshold: number;
+  private readonly circuitBreakerResetMs: number;
+  private circuitBreaker!: CircuitBreaker;
 
   constructor(
     private readonly config: ConfigService,
@@ -36,6 +43,40 @@ export class HorizonService {
     this.horizonUrl = networkConfig.horizonUrl;
     this.maxRequests = this.config.get<number>("HORIZON_RATE_LIMIT_MAX", RL_MAX_REQUESTS);
     this.windowMs = this.config.get<number>("HORIZON_RATE_LIMIT_WINDOW_MS", RL_WINDOW_MS);
+    this.circuitBreakerThreshold = this.config.get<number>(
+      "HORIZON_CIRCUIT_BREAKER_THRESHOLD",
+      HORIZON_CIRCUIT_BREAKER_THRESHOLD,
+    );
+    this.circuitBreakerResetMs = this.config.get<number>(
+      "HORIZON_CIRCUIT_BREAKER_RESET_MS",
+      HORIZON_CIRCUIT_BREAKER_RESET_MS,
+    );
+    this.initCircuitBreaker();
+  }
+
+  private initCircuitBreaker(): void {
+    this.circuitBreaker = new CircuitBreaker(
+      async (url: string, headers: Record<string, string>) =>
+        this.fetchFromHorizonInternal(url, headers),
+      {
+        timeout: 10_000,
+        maxFailures: this.circuitBreakerThreshold,
+        resetTimeout: this.circuitBreakerResetMs,
+        name: "HorizonAPICircuitBreaker",
+      },
+    );
+
+    this.circuitBreaker.on("open", () => {
+      this.logger.warn("Horizon circuit breaker opened due to consecutive failures");
+    });
+
+    this.circuitBreaker.on("halfOpen", () => {
+      this.logger.debug("Horizon circuit breaker transitioning to half-open state");
+    });
+
+    this.circuitBreaker.on("close", () => {
+      this.logger.debug("Horizon circuit breaker closed, resuming normal operations");
+    });
   }
 
   async checkRateLimit(account: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
@@ -87,7 +128,7 @@ export class HorizonService {
     }
 
     const url = this.buildHorizonUrl(account, cursor, clampedLimit);
-    const raw = await this.fetchFromHorizon(url);
+    const raw = await this.fetchFromHorizonWithCircuitBreaker(url);
     const records = this.extractRecords(raw);
     const filtered = filterHorizonOperations(records);
     const nextCursor = this.extractNextCursor(raw);
@@ -112,28 +153,54 @@ export class HorizonService {
     return `${base}?${params.toString()}`;
   }
 
-  private async fetchFromHorizon(url: string): Promise<Record<string, unknown>> {
-    try {
-      const headers: Record<string, string> = {
-        Accept: "application/json",
-        ...(this.getHorizonApiKey()
-          ? { Authorization: `Bearer ${this.getHorizonApiKey()}` }
-          : {}),
-      };
+  private async fetchFromHorizonWithCircuitBreaker(url: string): Promise<Record<string, unknown>> {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      ...(this.getHorizonApiKey()
+        ? { Authorization: `Bearer ${this.getHorizonApiKey()}` }
+        : {}),
+    };
 
+    try {
+      return (await this.circuitBreaker.fire(url, headers)) as Record<string, unknown>;
+    } catch (err) {
+      if (this.circuitBreaker.opened) {
+        const retryAfterSeconds = Math.ceil(this.circuitBreakerResetMs / 1000);
+        const error = new ServiceUnavailableException("Horizon is temporarily unavailable");
+        (error as any).retryAfter = retryAfterSeconds;
+        throw error;
+      }
+
+      this.logger.error(`Horizon fetch failed: ${err}`);
+      throw new BadGatewayException("Horizon is unreachable");
+    }
+  }
+
+  private async fetchFromHorizonInternal(
+    url: string,
+    headers: Record<string, string>,
+  ): Promise<Record<string, unknown>> {
+    try {
       const res = await fetch(url, {
         headers,
         signal: AbortSignal.timeout(10_000),
       });
 
       if (!res.ok) {
-        throw new Error(`Horizon returned HTTP ${res.status}`);
+        const error = new Error(`Horizon returned HTTP ${res.status}`);
+        (error as any).statusCode = res.status;
+        throw error;
       }
 
       return (await res.json()) as Record<string, unknown>;
     } catch (err) {
-      this.logger.error(`Horizon fetch failed: ${err}`);
-      throw new BadGatewayException("Horizon is unreachable");
+      const statusCode = (err as any).statusCode;
+      if (statusCode === 429) {
+        const error = new Error("Too Many Requests from Horizon");
+        (error as any).statusCode = 429;
+        throw error;
+      }
+      throw err;
     }
   }
 

@@ -7,6 +7,7 @@ import {
   HttpException,
   Logger,
   Res,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import type { Response } from "express";
 import { HorizonService } from "./horizon.service";
@@ -58,6 +59,16 @@ export class HorizonController {
       );
     }
 
-    return this.horizonService.getTransactions(account, cursor, limit);
+    try {
+      return await this.horizonService.getTransactions(account, cursor, limit);
+    } catch (err) {
+      if (err instanceof ServiceUnavailableException) {
+        const retryAfter = (err as any).retryAfter;
+        if (retryAfter) {
+          res?.setHeader("Retry-After", String(retryAfter));
+        }
+      }
+      throw err;
+    }
   }
 }

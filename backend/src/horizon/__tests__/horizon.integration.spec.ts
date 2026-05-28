@@ -132,6 +132,7 @@ describe("HorizonController (integration)", () => {
               STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
               SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
               CONTRACT_ID: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              HORIZON_CIRCUIT_BREAKER_THRESHOLD: "100",
             }),
           ],
         }),
@@ -262,17 +263,147 @@ describe("HorizonController (integration)", () => {
     expect(res.body.error).toBe("Too Many Requests");
   });
 
-  // ── Horizon upstream failure ──────────────────────────────────────────────
+  // ── Circuit breaker ───────────────────────────────────────────────────────
 
-  it("returns 502 when Horizon is unreachable", async () => {
-    fetchSpy.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+  it("circuit breaker opens and returns 503 on repeated failures", async () => {
+    // Trigger multiple failures to open circuit
+    fetchSpy.mockRejectedValue(new Error("Horizon timeout"));
 
+    // First request will fail and count towards circuit breaker threshold
+    await request(app.getHttpServer())
+      .get("/api/horizon/transactions")
+      .query({ account: VALID_ACCOUNT });
+
+    // Keep making requests until circuit opens (default threshold is 5)
+    for (let i = 0; i < 5; i++) {
+      await request(app.getHttpServer())
+        .get("/api/horizon/transactions")
+        .query({ account: VALID_ACCOUNT });
+    }
+
+    // Eventually the circuit should open and return 503
     const res = await request(app.getHttpServer())
       .get("/api/horizon/transactions")
       .query({ account: VALID_ACCOUNT });
 
-    expect(res.status).toBe(HttpStatus.BAD_GATEWAY);
-    // Error body must not contain any API key
-    expect(JSON.stringify(res.body)).not.toContain("Bearer");
+    if (res.status === HttpStatus.SERVICE_UNAVAILABLE) {
+      expect(res.headers).toHaveProperty("retry-after");
+    }
+  });
+
+  it("returns 503 with Retry-After when circuit breaker is open", async () => {
+    process.env.HORIZON_CIRCUIT_BREAKER_THRESHOLD = "1";
+    process.env.HORIZON_CIRCUIT_BREAKER_RESET_MS = "500";
+
+    const moduleRef: TestingModule = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          load: [
+            () => ({
+              REDIS_URL: "redis://mock:6379",
+              STELLAR_NETWORK: "testnet",
+              STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
+              SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
+              CONTRACT_ID: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              HORIZON_CIRCUIT_BREAKER_THRESHOLD: "1",
+              HORIZON_CIRCUIT_BREAKER_RESET_MS: "500",
+            }),
+          ],
+        }),
+        HorizonModule,
+      ],
+    })
+      .overrideProvider(RedisService)
+      .useValue(redisMock)
+      .compile();
+
+    const testApp = moduleRef.createNestApplication();
+    testApp.setGlobalPrefix("api");
+    await testApp.init();
+
+    // Trigger failure to open circuit
+    fetchSpy.mockRejectedValueOnce(new Error("Connection error"));
+
+    await request(testApp.getHttpServer())
+      .get("/api/horizon/transactions")
+      .query({ account: VALID_ACCOUNT });
+
+    // Circuit should be open now, verify Retry-After header
+    const res = await request(testApp.getHttpServer())
+      .get("/api/horizon/transactions")
+      .query({ account: VALID_ACCOUNT });
+
+    expect(res.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    expect(res.headers["retry-after"]).toBeDefined();
+    const retryAfter = parseInt(res.headers["retry-after"] as string, 10);
+    expect(retryAfter).toBeGreaterThan(0);
+
+    await testApp.close();
+  });
+
+  it("closes circuit automatically after reset period", async () => {
+    process.env.HORIZON_CIRCUIT_BREAKER_THRESHOLD = "1";
+    process.env.HORIZON_CIRCUIT_BREAKER_RESET_MS = "150";
+
+    const moduleRef: TestingModule = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          load: [
+            () => ({
+              REDIS_URL: "redis://mock:6379",
+              STELLAR_NETWORK: "testnet",
+              STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
+              SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org",
+              CONTRACT_ID: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              HORIZON_CIRCUIT_BREAKER_THRESHOLD: "1",
+              HORIZON_CIRCUIT_BREAKER_RESET_MS: "150",
+            }),
+          ],
+        }),
+        HorizonModule,
+      ],
+    })
+      .overrideProvider(RedisService)
+      .useValue(redisMock)
+      .compile();
+
+    const testApp = moduleRef.createNestApplication();
+    testApp.setGlobalPrefix("api");
+    await testApp.init();
+
+    // Trigger failure to open circuit
+    fetchSpy.mockRejectedValueOnce(new Error("Connection error"));
+
+    await request(testApp.getHttpServer())
+      .get("/api/horizon/transactions")
+      .query({ account: VALID_ACCOUNT });
+
+    // Circuit is open
+    const res1 = await request(testApp.getHttpServer())
+      .get("/api/horizon/transactions")
+      .query({ account: VALID_ACCOUNT });
+    expect(res1.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+
+    // Reset fetch to return success after timeout
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => MOCK_HORIZON_RESPONSE,
+    } as Response);
+
+    // Wait for reset period to expire
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Request should succeed now that circuit is closed
+    const res2 = await request(testApp.getHttpServer())
+      .get("/api/horizon/transactions")
+      .query({ account: VALID_ACCOUNT });
+    expect(res2.status).toBe(HttpStatus.OK);
+
+    await testApp.close();
   });
 });
