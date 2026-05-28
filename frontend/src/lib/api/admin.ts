@@ -65,19 +65,23 @@ export const adminApi = {
       body: JSON.stringify({ enabled }),
     }),
 
-  getAudits: (jwt: string, params: { cursor?: string; limit?: number; action?: string; actor?: string }) => {
+  getAudits: (jwt: string, params: { cursor?: string; limit?: number; action?: string; actor?: string; dateFrom?: string; dateTo?: string }) => {
     const q = new URLSearchParams()
     if (params.cursor) q.set('cursor', params.cursor)
     if (params.limit) q.set('limit', String(params.limit))
     if (params.action) q.set('action', params.action)
     if (params.actor) q.set('actor', params.actor)
+    if (params.dateFrom) q.set('dateFrom', params.dateFrom)
+    if (params.dateTo) q.set('dateTo', params.dateTo)
     return apiFetch<AuditPage>(`${base()}/audits?${q}`, { headers: authHeaders(jwt) })
   },
 
-  exportAuditsUrl: (jwt: string, action?: string, actor?: string) => {
+  exportAuditsUrl: (jwt: string, action?: string, actor?: string, dateFrom?: string, dateTo?: string) => {
     const q = new URLSearchParams()
     if (action) q.set('action', action)
     if (actor) q.set('actor', actor)
+    if (dateFrom) q.set('dateFrom', dateFrom)
+    if (dateTo) q.set('dateTo', dateTo)
     return `${base()}/audits/export?${q}`
   },
 
