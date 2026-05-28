@@ -124,6 +124,12 @@ export interface EnvironmentVariables {
    * Remove after the overlap window (≥ JWT_EXPIRES_IN) has elapsed.
    */
   JWT_SECRET_NEXT: string;
+  /** Maximum claim evidence file size in bytes. Defaults to 10 MB. */
+  EVIDENCE_MAX_BYTES: number;
+  /** Max evidence uploads per wallet per rate-limit window. */
+  EVIDENCE_UPLOAD_RATE_LIMIT: number;
+  /** Evidence upload rate-limit window in seconds. */
+  EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
 }
 
 export type EnvKey = keyof EnvironmentVariables;
@@ -1195,6 +1201,30 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     required: 'optional',
     secret: true,
     schema: Joi.string().min(32).allow('').default(''),
+  },
+  EVIDENCE_MAX_BYTES: {
+    key: 'EVIDENCE_MAX_BYTES',
+    section: 'Evidence uploads',
+    description: 'Maximum allowed claim evidence file size in bytes. Defaults to 10 MB.',
+    example: '10485760',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(10485760),
+  },
+  EVIDENCE_UPLOAD_RATE_LIMIT: {
+    key: 'EVIDENCE_UPLOAD_RATE_LIMIT',
+    section: 'Evidence uploads',
+    description: 'Maximum evidence uploads per wallet per rate-limit window.',
+    example: '5',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(5),
+  },
+  EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: {
+    key: 'EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS',
+    section: 'Evidence uploads',
+    description: 'Evidence upload rate-limit window in seconds.',
+    example: '3600',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(3600),
   },
 };
 

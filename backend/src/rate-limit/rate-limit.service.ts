@@ -327,6 +327,42 @@ export class RateLimitService implements OnModuleInit {
     }
   }
 
+  /**
+   * Check per-wallet rate limit for evidence uploads with configurable parameters.
+   * Uses a Redis sorted-set sliding window, keyed separately from claim submission.
+   */
+  async checkWalletEvidenceLimit(
+    walletAddress: string,
+    limit: number,
+    windowSeconds: number,
+  ): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
+    try {
+      const client = this.redis.getClient();
+      const key = `rate_limit:evidence:${walletAddress.toLowerCase()}`;
+      const nowMs = Date.now();
+      const windowMs = windowSeconds * 1000;
+      const windowStart = nowMs - windowMs;
+
+      await client.zremrangebyscore(key, 0, windowStart);
+      const currentCount = await client.zcard(key);
+
+      if (currentCount >= limit) {
+        const oldest = await client.zrange(key, 0, 0, 'WITHSCORES');
+        const oldestTimestamp = oldest.length > 1 ? parseInt(oldest[1], 10) : windowStart;
+        const retryAfterSeconds = Math.max(1, Math.ceil((oldestTimestamp + windowMs - nowMs) / 1000));
+        return { allowed: false, retryAfterSeconds };
+      }
+
+      await client.zadd(key, nowMs, `${nowMs}-${Math.random().toString(36).slice(2)}`);
+      await client.pexpire(key, windowMs * 2);
+
+      return { allowed: true, retryAfterSeconds: 0 };
+    } catch (error) {
+      this.logger.error(`Evidence rate limit check failed for ${walletAddress}: ${error}`);
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+  }
+
   // ── Global circuit breaker ──────────────────────────────────────────────
 
   /**
