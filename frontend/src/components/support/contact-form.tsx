@@ -26,6 +26,7 @@ export function ContactForm() {
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [ticketRef, setTicketRef] = useState<string | null>(null);
 
   const {
     register,
@@ -43,7 +44,8 @@ export function ContactForm() {
       return;
     }
     try {
-      await submitSupportTicket({ ...data, captchaToken });
+      const result = await submitSupportTicket({ ...data, captchaToken });
+      setTicketRef(result.id);
       setStatus("success");
       reset();
       setCaptchaToken(null);
@@ -58,7 +60,12 @@ export function ContactForm() {
       <div className="flex flex-col items-center gap-3 py-10 text-center">
         <CheckCircle className="h-10 w-10 text-green-500" />
         <p className="font-medium">Message received. We&apos;ll get back to you shortly.</p>
-        <Button variant="outline" size="sm" onClick={() => setStatus('idle')}>Send another</Button>
+        {ticketRef && (
+          <p className="text-sm text-muted-foreground">
+            Ticket reference: <span className="font-mono font-medium">{ticketRef}</span>
+          </p>
+        )}
+        <Button variant="outline" size="sm" onClick={() => { setStatus('idle'); setTicketRef(null); }}>Send another</Button>
       </div>
     );
   }
@@ -115,7 +122,7 @@ export function ContactForm() {
         </p>
       )}
 
-      <Button type="submit" disabled={isSubmitting} className="w-full">
+      <Button type="submit" disabled={isSubmitting || !captchaToken} className="w-full">
         {isSubmitting ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
