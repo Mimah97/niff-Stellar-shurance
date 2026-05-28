@@ -3,7 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { HttpExceptionFilter } from '../../src/common/filters/http-exception.filter';
-import { mintUserToken } from '../helpers/jwt';
+import { mintUserToken, mintAdminToken } from '../helpers/jwt';
 
 // A syntactically valid Stellar public key that is NOT a real keypair —
 // used only to exercise the challenge endpoint's format validation path.
@@ -216,6 +216,85 @@ describe('NiffyInsure API (E2E)', () => {
   });
 
   // ── Idempotency ─────────────────────────────────────────────────────────────
+
+  // ── Admin Claims Search ────────────────────────────────────────────────────
+
+  describe('GET /api/admin/claims/search (admin-only)', () => {
+    it('returns 401 without valid JWT', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search');
+
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 403 with user JWT (not admin)', async () => {
+      const token = mintUserToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns paginated claims list with empty results by default', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('data');
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body).toHaveProperty('pagination');
+      expect(res.body.pagination).toHaveProperty('total');
+      expect(res.body.pagination).toHaveProperty('nextCursor');
+    });
+
+    it('filters results by status', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search')
+        .query({ status: 'PENDING' })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('data');
+    });
+
+    it('filters results by claimant', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search')
+        .query({ claimant: 'GABC123' })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('data');
+    });
+
+    it('supports cursor pagination with limit', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search')
+        .query({ limit: '10' })
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.pagination.total).toBeDefined();
+    });
+
+    it('excludes soft-deleted claims', async () => {
+      const adminToken = mintAdminToken(FAKE_PUBKEY);
+      const res = await request(app.getHttpServer())
+        .get('/api/admin/claims/search')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      // All returned claims should have deletedAt = null
+      expect(res.body.data.every((c: any) => !c.deletedAt)).toBe(true);
+    });
+  });
 
   describe('POST /api/claims (with Idempotency-Key)', () => {
     const idempotencyKey = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';

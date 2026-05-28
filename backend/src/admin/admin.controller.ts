@@ -419,4 +419,35 @@ export class AdminController {
     });
     return { queue, jobId, status: 'retried' };
   }
+
+  /**
+   * GET /admin/claims/search
+   *
+   * Search claims with full-text search and filtering.
+   * Supports: q (text search), status, claimant, policyId, dateFrom, dateTo
+   * Returns cursor-paginated results with total count.
+   */
+  @Get('claims/search')
+  @ApiOperation({ summary: 'Search claims with filters and full-text search' })
+  async searchClaims(
+    @Query('q') q?: string,
+    @Query('status') status?: string,
+    @Query('claimant') claimant?: string,
+    @Query('policyId') policyId?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('after') after?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminService.searchClaims({
+      q,
+      status,
+      claimant,
+      policyId,
+      dateFrom,
+      dateTo,
+      after,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
 }

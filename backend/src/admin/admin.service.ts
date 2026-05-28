@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { Queue } from 'bullmq';
 import { getBullMQConnection } from '../redis/client';
+import { Prisma } from '@prisma/client';
 
 export interface BackfillJobInfo {
   jobId: string;
@@ -113,6 +114,98 @@ export class AdminService {
       failedReason: job.failedReason,
       finishedOn: job.finishedOn,
       processedOn: job.processedOn,
+    };
+  }
+
+  async searchClaims(options: {
+    q?: string;
+    status?: string;
+    claimant?: string;
+    policyId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    after?: string;
+    limit?: number;
+  }) {
+    const DEFAULT_LIMIT = 20;
+    const MAX_LIMIT = 100;
+    const limit = Math.min(options.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+
+    // Build where conditions
+    const where: Prisma.ClaimWhereInput = {
+      deletedAt: null, // Exclude soft-deleted
+    };
+
+    // Full-text search on description (case-insensitive contains)
+    if (options.q) {
+      where.description = {
+        contains: options.q,
+        mode: 'insensitive',
+      };
+    }
+
+    // Status filter
+    if (options.status) {
+      where.status = options.status as any;
+    }
+
+    // Claimant (creator) filter
+    if (options.claimant) {
+      where.creatorAddress = options.claimant;
+    }
+
+    // Policy filter
+    if (options.policyId) {
+      where.policyId = options.policyId;
+    }
+
+    // Date range filters
+    const dateConditions: Prisma.DateTimeFilter = {};
+    if (options.dateFrom) {
+      (dateConditions as any).gte = new Date(options.dateFrom);
+    }
+    if (options.dateTo) {
+      (dateConditions as any).lte = new Date(options.dateTo);
+    }
+    if (Object.keys(dateConditions).length > 0) {
+      where.createdAt = dateConditions;
+    }
+
+    // Keyset pagination: decode cursor
+    let skipId: number | undefined;
+    if (options.after) {
+      try {
+        const decoded = Buffer.from(options.after, 'base64').toString('utf-8');
+        skipId = parseInt(decoded, 10);
+        if (Number.isNaN(skipId)) skipId = undefined;
+      } catch {
+        skipId = undefined;
+      }
+    }
+
+    // Fetch one extra record to determine if there's a next page
+    const claims = await this.prisma.claim.findMany({
+      where,
+      orderBy: { createdAt: 'desc', id: 'desc' },
+      take: limit + 1,
+      skip: skipId ? 1 : 0,
+      cursor: skipId ? { id: skipId } : undefined,
+    });
+
+    const hasNextPage = claims.length > limit;
+    const data = claims.slice(0, limit);
+    const nextCursor = hasNextPage ? Buffer.from(String(data[data.length - 1]?.id ?? '')).toString('base64') : null;
+
+    // Get total count
+    const total = await this.prisma.claim.count({ where });
+
+    return {
+      data,
+      pagination: {
+        total,
+        nextCursor,
+        hasNextPage,
+      },
     };
   }
 
