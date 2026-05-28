@@ -297,7 +297,7 @@ enum TicketStatus {
   RESOLVED
   CLOSED
 }
-
+git
 /// Tracks progress of an operator-initiated reindex job.
 /// One row per BullMQ job ID; updated atomically with each processed batch.
 model ReindexProgress {
