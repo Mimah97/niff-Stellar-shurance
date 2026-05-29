@@ -32,6 +32,7 @@ import { ClaimsListResponseDto, ClaimDetailResponseDto } from './dto/claim.dto';
 import { BuildClaimTransactionDto } from './dto/build-claim-transaction.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { EvidenceUploadService } from './services/evidence-upload.service';
+import { ClaimHistoryService } from './services/claim-history.service';
 import { EVIDENCE_MAX_BYTES_DEFAULT } from './dto/evidence-upload.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { WalletAddress } from '../auth/decorators/wallet-address.decorator';
@@ -48,6 +49,7 @@ export class ClaimsController {
   constructor(
     private readonly claimsService: ClaimsService,
     private readonly evidenceUploadService: EvidenceUploadService,
+    private readonly claimHistoryService: ClaimHistoryService,
   ) {}
 
   @Post('evidence/upload')
@@ -152,6 +154,20 @@ export class ClaimsController {
     @WalletAddress() walletAddress?: string,
   ): Promise<ClaimDetailResponseDto> {
     return this.claimsService.getClaimById(id, walletAddress);
+  }
+
+  @Get(':id/history')
+  @ApiOperation({ summary: 'Get paginated status transition history for a claim' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'Opaque pagination cursor' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (max 100)' })
+  @ApiResponse({ status: 200, description: 'Paginated status history in ledger order' })
+  @ApiResponse({ status: 404, description: 'Claim not found' })
+  async getClaimHistory(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('cursor') cursor?: string,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit?: number,
+  ) {
+    return this.claimHistoryService.getHistory(id, cursor, limit);
   }
 
   @Post('build-transaction')

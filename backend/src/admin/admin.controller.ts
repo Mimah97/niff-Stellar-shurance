@@ -34,6 +34,8 @@ import { PrivacyService, PrivacyRequestType } from '../maintenance/privacy.servi
 import { RateLimitService } from '../rate-limit/rate-limit.service';
 import { QueueMonitorService } from '../queues/queue-monitor.service';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
+import { SupportService } from '../support/support.service';
+import { UpdateTicketStatusDto } from '../support/dto/update-ticket-status.dto';
 
 class PrivacyRequestDto {
   @IsString() subjectWalletAddress!: string;
@@ -61,6 +63,7 @@ export class AdminController {
     private readonly queueMonitor: QueueMonitorService,
     private readonly configService: ConfigService,
     private readonly solvencyMonitoringService: SolvencyMonitoringService,
+    private readonly supportService: SupportService,
   ) {}
 
   /**
@@ -418,5 +421,17 @@ export class AdminController {
       ipAddress: req.ip,
     });
     return { queue, jobId, status: 'retried' };
+  }
+
+  @Patch('support/tickets/:id')
+  @ApiOperation({ summary: 'Update support ticket status with audit logging' })
+  async updateSupportTicketStatus(
+    @Param('id') ticketId: string,
+    @Body() dto: UpdateTicketStatusDto,
+    @Req() req: AdminRequest,
+  ) {
+    const actor = req.user?.walletAddress ?? 'unknown';
+    const result = await this.supportService.updateTicketStatus(ticketId, dto, actor, req.ip);
+    return result;
   }
 }

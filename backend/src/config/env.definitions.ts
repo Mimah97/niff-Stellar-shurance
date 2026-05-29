@@ -1256,6 +1256,50 @@ export function buildValidationSchema(): Joi.ObjectSchema<EnvironmentVariables> 
   return Joi.object(shape) as Joi.ObjectSchema<EnvironmentVariables>;
 }
 
+export function renderEnvDocs(): string {
+  const lines: string[] = [
+    '# Environment Variables Reference',
+    '',
+    '> **Auto-generated** from `backend/src/config/env.definitions.ts`.',
+    '> Do not edit manually — run `npm run env:example:generate` in `backend/` to regenerate.',
+    '',
+    '## Requirement labels',
+    '',
+    '| Label | Meaning |',
+    '|---|---|',
+    '| `required` | Application boot fails immediately if missing or invalid |',
+    '| `optional` | Only needed when the related feature/integration is enabled |',
+    '| `conditional` | Required when another setting enables that integration |',
+    '',
+    '---',
+    '',
+  ];
+
+  const sections = new Map<string, EnvDefinition[]>();
+  for (const key of ENV_KEYS) {
+    const def = ENV_DEFINITIONS[key];
+    const bucket = sections.get(def.section) ?? [];
+    bucket.push(def);
+    sections.set(def.section, bucket);
+  }
+
+  for (const [section, defs] of sections.entries()) {
+    lines.push(`## ${section}`, '');
+    lines.push('| Variable | Required | Description | Default |');
+    lines.push('|---|---|---|---|');
+    for (const def of defs) {
+      const defaultVal = def.example !== '' ? `\`${def.example}\`` : '—';
+      const secret = def.secret ? ' *(secret)*' : '';
+      lines.push(
+        `| \`${def.key}\` | \`${def.required}\` | ${def.description}${secret} | ${defaultVal} |`,
+      );
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd() + '\n';
+}
+
 export function renderEnvExample(): string {
   const header = [
     '# Backend environment variables for NiffyInsure',
