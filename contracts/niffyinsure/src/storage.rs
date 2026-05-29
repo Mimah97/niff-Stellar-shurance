@@ -96,6 +96,8 @@ pub enum DataKey {
     MaxEvidenceCount,
     /// Last `end_ledger` for which a PolicyExpired event was emitted for this policy term.
     PolicyExpiredEventEndLedger(Address, u32),
+    /// Allowlisted IPFS gateway URL prefixes for evidence validation.
+    GatewayAllowlist,
     // ── Reserved: future governance token (`governance_token` module) ────────
     /// Runtime toggle: only meaningful when crate is built with `governance-token`.
     /// Unset or `false` in MVP; no token logic runs unless feature + flag align.
@@ -152,8 +154,12 @@ pub enum DataKey {
     // ── Rolling claim cap (persistent) ───────────────────────────────────────
     /// Per-policy rolling window accumulator: (holder, policy_id) → RollingClaimWindowState.
     RollingClaimState(Address, u32),
+    // ── Commit-reveal voting ──────────────────────────────────────────────────
+    /// Commit and reveal phase ledger boundaries for a claim.
+    CommitRevealPhases(u64),
+    /// Voter's 32-byte commitment hash: SHA-256(vote_byte || salt).
+    VoteCommitment(u64, Address),
 }
-
 pub fn has_open_claim(env: &Env, holder: &Address, policy_id: u32) -> bool {
     env.storage()
         .instance()
@@ -802,6 +808,24 @@ pub fn get_max_evidence_count(env: &Env) -> u32 {
         .get(&DataKey::MaxEvidenceCount)
         .unwrap_or(crate::types::IMAGE_URLS_MAX)
 }
+
+// ── Gateway allowlist (instance) ──────────────────────────────────────────────
+
+/// Set the allowlisted IPFS gateway URL prefixes for evidence validation.
+pub fn set_gateway_allowlist(env: &Env, gateways: &Vec<String>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::GatewayAllowlist, gateways);
+}
+
+/// Get the allowlisted IPFS gateway URL prefixes. Returns empty vec if not set.
+pub fn get_gateway_allowlist(env: &Env) -> Vec<String> {
+    env.storage()
+        .instance()
+        .get(&DataKey::GatewayAllowlist)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
 // ── Appeal vote (persistent) ──────────────────────────────────────────────────
 
 pub fn set_appeal_vote(env: &Env, claim_id: u64, voter: &Address, vote: &VoteOption) {
@@ -1174,6 +1198,61 @@ pub fn get_claim_ttl_info(env: &Env, claim_id: u64) -> Option<u32> {
     } else {
         None
     }
+}
+
+// ── Policy type registry (instance) ──────────────────────────────────────────
+
+/// Get the admin-configured settings for a policy type.
+/// Returns `None` when no config has been set (all defaults apply).
+pub fn get_policy_type_config(
+    env: &Env,
+    policy_type: &crate::types::PolicyType,
+) -> Option<crate::types::PolicyTypeConfig> {
+    env.storage()
+        .instance()
+        .get(&DataKey::PolicyTypeConfig(policy_type.clone()))
+}
+
+/// Persist admin-configured settings for a policy type.
+pub fn set_policy_type_config(
+    env: &Env,
+    policy_type: &crate::types::PolicyType,
+    config: &crate::types::PolicyTypeConfig,
+) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PolicyTypeConfig(policy_type.clone()), config);
+}
+
+// ── Per-asset premium table (instance) ───────────────────────────────────────
+
+/// Get the asset-specific multiplier table for `asset`.
+/// Returns `None` when no asset-specific table has been set (caller should fall back to default).
+pub fn get_asset_premium_table(
+    env: &Env,
+    asset: &Address,
+) -> Option<crate::types::MultiplierTable> {
+    env.storage()
+        .instance()
+        .get(&DataKey::AssetPremiumTable(asset.clone()))
+}
+
+/// Persist an asset-specific multiplier table.
+pub fn set_asset_premium_table(
+    env: &Env,
+    asset: &Address,
+    table: &crate::types::MultiplierTable,
+) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AssetPremiumTable(asset.clone()), table);
+}
+
+/// Remove an asset-specific multiplier table (reverts to global default).
+pub fn remove_asset_premium_table(env: &Env, asset: &Address) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::AssetPremiumTable(asset.clone()));
 }
 
 // ── Non-experimental stubs (panic guards) ────────────────────────────────────

@@ -190,3 +190,102 @@ describe("parseOrigins utility", () => {
     ]);
   });
 });
+
+/**
+ * Build a test app that mirrors the CORS_ALLOWED_ORIGINS + production-mode logic from main.ts.
+ */
+function buildTestAppWithEnv(opts: {
+  corsAllowedOrigins?: string;
+  frontendOrigins?: string;
+  adminOrigins?: string;
+  isProduction?: boolean;
+}) {
+  const corsAllowedOriginsRaw = opts.corsAllowedOrigins;
+  const frontendOrigins = parseOrigins(opts.frontendOrigins ?? "");
+  const adminOrigins = parseOrigins(opts.adminOrigins ?? "");
+  const allowedOrigins = corsAllowedOriginsRaw
+    ? parseOrigins(corsAllowedOriginsRaw)
+    : [...frontendOrigins, ...adminOrigins];
+  const isProduction = opts.isProduction ?? false;
+
+  const app = express();
+  app.use(
+    cors({
+      origin: (origin, cb) => {
+        if (!origin) return cb(null, true);
+        if (isProduction && allowedOrigins.includes("*")) {
+          return cb(new Error("Wildcard origin not allowed in production"), false);
+        }
+        if (allowedOrigins.includes(origin)) return cb(null, origin);
+        return cb(new Error("Not allowed by CORS"), false);
+      },
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Authorization", "Content-Type", "X-Requested-With", "Idempotency-Key", "X-Tenant-Id"],
+      maxAge: 86400,
+      preflightContinue: false,
+      optionsSuccessStatus: 204,
+    }),
+  );
+  app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+  return app;
+}
+
+describe("CORS_ALLOWED_ORIGINS env var", () => {
+  it("CORS_ALLOWED_ORIGINS takes precedence over FRONTEND_ORIGINS", async () => {
+    const app = buildTestAppWithEnv({
+      corsAllowedOrigins: "https://override.example.com",
+      frontendOrigins: "https://old.example.com",
+    });
+    const res = await request(app)
+      .get("/api/health")
+      .set("Origin", "https://override.example.com");
+    expect(res.headers["access-control-allow-origin"]).toBe("https://override.example.com");
+  });
+
+  it("origin not in CORS_ALLOWED_ORIGINS is rejected", async () => {
+    const app = buildTestAppWithEnv({
+      corsAllowedOrigins: "https://allowed.example.com",
+    });
+    const res = await request(app)
+      .get("/api/health")
+      .set("Origin", "https://notallowed.example.com");
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("preflight includes Access-Control-Max-Age: 86400", async () => {
+    const app = buildTestAppWithEnv({
+      corsAllowedOrigins: "https://app.example.com",
+    });
+    const res = await request(app)
+      .options("/api/health")
+      .set("Origin", "https://app.example.com")
+      .set("Access-Control-Request-Method", "GET");
+    expect(res.status).toBe(204);
+    expect(res.headers["access-control-max-age"]).toBe("86400");
+  });
+});
+
+describe("Production mode CORS", () => {
+  it("wildcard origin is rejected in production mode", async () => {
+    const app = buildTestAppWithEnv({
+      corsAllowedOrigins: "*",
+      isProduction: true,
+    });
+    const res = await request(app)
+      .get("/api/health")
+      .set("Origin", "https://attacker.com");
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("explicit https origin is allowed in production mode", async () => {
+    const app = buildTestAppWithEnv({
+      corsAllowedOrigins: "https://app.niffyinsure.com",
+      isProduction: true,
+    });
+    const res = await request(app)
+      .get("/api/health")
+      .set("Origin", "https://app.niffyinsure.com");
+    expect(res.headers["access-control-allow-origin"]).toBe("https://app.niffyinsure.com");
+  });
+});

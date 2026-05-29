@@ -81,6 +81,21 @@ pub enum PolicyType {
     Property,
 }
 
+/// Per-policy-type admin configuration stored in the registry.
+///
+/// `payout_asset_override`: when `Some(asset)`, approved claims for this policy type
+/// are paid out in `asset` instead of the policy's premium asset. The override asset
+/// must be allowlisted at the time it is configured (validated in the admin setter).
+///
+/// When `None`, payout falls back to the policy's bound premium asset (existing behaviour).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyTypeConfig {
+    /// Optional SEP-41 asset contract to use for claim payouts.
+    /// Must be allowlisted when set. `None` = use premium asset (default).
+    pub payout_asset_override: Option<Address>,
+}
+
 #[contracttype]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RegionTier {
@@ -114,6 +129,7 @@ pub type CoverageType = CoverageTier;
 ///   Processing  → Rejected      (participation quorum met + reject wins or tie; or deadline with no quorum)
 ///   Processing  → Withdrawn     (claimant calls `withdraw_claim` before any vote is cast)
 ///   Approved    → Paid          (admin calls process_claim)
+///   Approved    → PayoutTimeout (keeper calls `process_payout_timeout` after `payout_deadline_ledger`)
 ///
 /// Appeal-flow transitions (requires Rejected status + open appeal window):
 ///   Rejected    → UnderAppeal   (claimant calls open_appeal within window)
@@ -129,6 +145,7 @@ pub enum ClaimStatus {
     Processing,
     Pending,
     Approved,
+    PayoutTimeout,
     Paid,
     Rejected,
     /// Claimant has opened an appeal; fresh vote round in progress.
@@ -181,6 +198,7 @@ impl ClaimStatus {
         matches!(
             self,
             ClaimStatus::Approved
+                | ClaimStatus::PayoutTimeout
                 | ClaimStatus::Paid
                 | ClaimStatus::Rejected
                 | ClaimStatus::AppealApproved
@@ -517,10 +535,16 @@ pub struct Claim {
     pub evidence: Vec<ClaimEvidenceEntry>,
     pub status: ClaimStatus,
     pub voting_deadline_ledger: u32,
+    /// Ledger by which an approved payout must be executed or the claim auto-times out.
+    pub payout_deadline_ledger: u32,
     pub approve_votes: u32,
     pub reject_votes: u32,
     /// Ledger sequence at which this claim was filed (voting window anchor).
     pub filed_at: u32,
+    /// Number of eligible voters in the snapshot taken at filing time.
+    /// Used for quorum calculation so the result is stable even if the
+    /// snapshot TTL expires before finalization.
+    pub eligible_voter_count: u32,
     // ── Appeal fields ────────────────────────────────────────────────────────
     /// Ledger by which `open_appeal` must be called (0 if never rejected).
     /// Set to `rejected_at + APPEAL_OPEN_WINDOW_LEDGERS` when status → Rejected.

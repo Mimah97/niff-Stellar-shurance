@@ -291,9 +291,37 @@ model FaqStat {
   @@map("faq_stats")
 }
 
+/// Tenant provisioning configuration.
+model Tenant {
+  id          String   @id @default(uuid())
+  name        String
+  contractIds String[] // JSON array stored as text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active])
+  @@index([createdAt])
+  @@map("tenants")
+}
+
 enum TicketStatus {
   OPEN
   IN_PROGRESS
   RESOLVED
   CLOSED
+}
+
+/// Off-chain profile for a wallet holder. Created on first authenticated GET /profile.
+model HolderProfile {
+  walletAddress         String   @id @map("wallet_address")
+  displayName           String?  @map("display_name")
+  /// Stored as-is; anonymized by the privacy service on request.
+  email                 String?
+  locale                String?  @default("en")
+  notificationPreferences Json?  @default("{}") @map("notification_preferences")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("holder_profiles")
 }

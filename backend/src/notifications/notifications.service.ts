@@ -30,6 +30,9 @@ import {
   buildClaimFinalizedEmail,
   buildClaimFinalizedDiscord,
   buildClaimFinalizedTelegram,
+  PolicyExpiryEmailTemplate,
+  PolicyExpiryPushTemplate,
+  PolicyExpiryContext,
 } from './notification.templates';
 
 @Injectable()
@@ -84,7 +87,18 @@ export class NotificationsService {
   async getUserNotificationPreferences(
     userId: string,
   ): Promise<NotificationPreferences> {
-    const storedPreferences = await this.preferencesRepository.findByUserId(userId);
+    let storedPreferences = await this.preferencesRepository.findByUserId(userId);
+
+    // Create record with defaults if it doesn't exist
+    if (!storedPreferences) {
+      await this.preferencesRepository.upsert({
+        userId,
+        renewalRemindersEnabled: DEFAULT_NOTIFICATION_PREFERENCES.renewalRemindersEnabled,
+        claimUpdatesEnabled: DEFAULT_NOTIFICATION_PREFERENCES.claimUpdatesEnabled,
+      });
+      storedPreferences = await this.preferencesRepository.findByUserId(userId);
+    }
+
     return this.resolveNotificationPreferences(storedPreferences);
   }
 
@@ -196,6 +210,76 @@ export class NotificationsService {
   /** Exposed for tests. */
   _clearSentSet() {
     this.sentSet.clear();
+  }
+
+  /**
+   * Send policy expiry notifications (email + push webhook) for a holder.
+   *
+   * Email is sent via SMTP when the holder has emailEnabled and an email address.
+   * Push is delivered via POST to PUSH_WEBHOOK_URL when configured.
+   * Opted-out users (renewalRemindersEnabled = false) receive no notifications.
+   */
+  async sendPolicyExpiryNotifications(
+    ctx: PolicyExpiryContext,
+    holderEmail?: string,
+  ): Promise<{ email: 'sent' | 'skipped' | 'failed'; push: 'sent' | 'skipped' | 'failed' }> {
+    const shouldSend = await this.shouldSendNotification(ctx.holderPublicKey, 'renewal_reminder');
+    if (!shouldSend) {
+      return { email: 'skipped', push: 'skipped' };
+    }
+
+    const emailResult = await this._sendPolicyExpiryEmail(ctx, holderEmail);
+    const pushResult = await this._sendPolicyExpiryPush(ctx);
+
+    return { email: emailResult, push: pushResult };
+  }
+
+  private async _sendPolicyExpiryEmail(
+    ctx: PolicyExpiryContext,
+    holderEmail?: string,
+  ): Promise<'sent' | 'skipped' | 'failed'> {
+    if (!holderEmail) return 'skipped';
+    try {
+      const tmpl = PolicyExpiryEmailTemplate(ctx);
+      await withRetry(() =>
+        this.getTransport().sendMail({
+          from: this.configService.get<string>('SMTP_FROM', 'niffyinsure@localhost'),
+          to: holderEmail,
+          subject: tmpl.subject,
+          text: tmpl.text,
+          html: tmpl.html,
+        }),
+      );
+      return 'sent';
+    } catch (err) {
+      this.logger.error(`Policy expiry email failed for policy ${ctx.policyId}: ${err}`);
+      return 'failed';
+    }
+  }
+
+  private async _sendPolicyExpiryPush(
+    ctx: PolicyExpiryContext,
+  ): Promise<'sent' | 'skipped' | 'failed'> {
+    const webhookUrl = this.configService.get<string>('PUSH_WEBHOOK_URL');
+    if (!webhookUrl) return 'skipped';
+    try {
+      const payload = PolicyExpiryPushTemplate(ctx);
+      const res = await withRetry(() =>
+        fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).then((r) => {
+          if (!r.ok) throw new Error(`Push webhook returned ${r.status}`);
+          return r;
+        }),
+      );
+      void res;
+      return 'sent';
+    } catch (err) {
+      this.logger.error(`Policy expiry push failed for policy ${ctx.policyId}: ${err}`);
+      return 'failed';
+    }
   }
 
   private resolveNotificationPreferences(

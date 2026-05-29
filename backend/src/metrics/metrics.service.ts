@@ -44,6 +44,10 @@ export class MetricsService implements OnModuleInit {
   /** result: hit | miss | bypass — quote simulation Redis cache */
   readonly quoteSimulationCacheTotal: client.Counter<string>;
 
+  // ── Slow query metrics ────────────────────────────────────────────────────
+  /** Total queries exceeding SLOW_QUERY_THRESHOLD_MS. */
+  readonly slowQueriesTotal: client.Counter<string>;
+
   // ── DB pool metrics ───────────────────────────────────────────────────────
   /** Number of connections currently executing a query. */
   readonly dbPoolActive: client.Gauge<string>;
@@ -166,6 +170,12 @@ export class MetricsService implements OnModuleInit {
       name: 'quote_simulation_cache_requests_total',
       help: 'Quote simulation cache lookups (hit/miss/bypass)',
       labelNames: ['result'],
+      registers: [this.registry],
+    });
+
+    this.slowQueriesTotal = new client.Counter({
+      name: 'db_slow_queries_total',
+      help: 'Total DB queries exceeding the slow query threshold',
       registers: [this.registry],
     });
 

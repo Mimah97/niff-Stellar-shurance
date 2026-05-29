@@ -1,13 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TxController } from './tx.controller';
 import { TxService } from './tx.service';
+import { TxSubmitQueue } from './tx-submit.queue';
+import { TxSubmitWorker } from './tx-submit.worker';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  // CacheModule is @Global() so RedisService is available without importing here.
-  // AuthModule exports PassportModule needed by OptionalJwtAuthGuard.
   imports: [AuthModule],
   controllers: [TxController],
-  providers: [TxService],
+  providers: [TxService, TxSubmitQueue, TxSubmitWorker],
+  exports: [TxSubmitQueue],
 })
 export class TxModule {}

@@ -105,3 +105,123 @@ export function buildClaimFinalizedTelegram(event: ClaimFinalizedEvent): string 
     `<i>Reply /unsubscribe to stop notifications.</i>`
   );
 }
+
+// ── Policy expiry templates ───────────────────────────────────────────────────
+
+export interface PolicyExpiryContext {
+  policyId: number;
+  holderPublicKey: string;
+  expiryLedger: number;
+  /** Human-readable time-to-expiry string, e.g. "7 days" or "1 day". */
+  timeToExpiry: string;
+  /** BCP-47 locale code, e.g. "en" or "es". Defaults to "en". */
+  locale?: string;
+}
+
+const EXPIRY_COPY: Record<string, { subject: string; heading: string; body: string; cta: string; unsubscribe: string }> = {
+  en: {
+    subject: 'Your NiffyInsure policy expires in {timeToExpiry}',
+    heading: 'Policy Expiry Reminder',
+    body: 'Your insurance policy #{policyId} will expire in approximately {timeToExpiry} (ledger {expiryLedger}). Renew now to avoid a coverage gap.',
+    cta: 'Renew Policy',
+    unsubscribe: 'To stop receiving expiry reminders, update your preferences at /notifications/preferences.',
+  },
+  es: {
+    subject: 'Tu póliza de NiffyInsure vence en {timeToExpiry}',
+    heading: 'Recordatorio de Vencimiento de Póliza',
+    body: 'Tu póliza de seguro #{policyId} vencerá en aproximadamente {timeToExpiry} (ledger {expiryLedger}). Renueva ahora para evitar una interrupción de cobertura.',
+    cta: 'Renovar Póliza',
+    unsubscribe: 'Para dejar de recibir recordatorios de vencimiento, actualiza tus preferencias en /notifications/preferences.',
+  },
+};
+
+function interpolate(template: string, vars: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => String(vars[key] ?? `{${key}}`));
+}
+
+/**
+ * Build an email template for an upcoming policy expiry.
+ *
+ * Supports English ("en") and Spanish ("es") locales.
+ * Falls back to English for unknown locales.
+ */
+export function PolicyExpiryEmailTemplate(ctx: PolicyExpiryContext): EmailTemplate {
+  const locale = ctx.locale && EXPIRY_COPY[ctx.locale] ? ctx.locale : 'en';
+  const copy = EXPIRY_COPY[locale];
+  const vars = {
+    policyId: ctx.policyId,
+    timeToExpiry: ctx.timeToExpiry,
+    expiryLedger: ctx.expiryLedger,
+    key: shortKey(ctx.holderPublicKey),
+  };
+
+  const subject = interpolate(copy.subject, vars);
+  const bodyText = interpolate(copy.body, vars);
+
+  const text = [
+    `Hello ${vars.key},`,
+    '',
+    bodyText,
+    '',
+    '──────────────────────────────────────────────',
+    copy.unsubscribe,
+    '',
+    'NiffyInsure — decentralised parametric insurance on Stellar',
+  ].join('\n');
+
+  const html = `
+<!DOCTYPE html>
+<html lang="${locale}">
+<head><meta charset="utf-8"><title>${subject}</title></head>
+<body style="font-family:sans-serif;max-width:600px;margin:auto;padding:24px">
+  <h2 style="color:#d97706">${copy.heading}</h2>
+  <table style="border-collapse:collapse;width:100%">
+    <tr><td style="padding:6px 0;color:#6b7280">Policy ID</td><td>${ctx.policyId}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Account</td><td>${vars.key}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Expires in</td><td>${ctx.timeToExpiry}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Expiry Ledger</td><td>${ctx.expiryLedger}</td></tr>
+  </table>
+  <p style="margin-top:16px">${bodyText}</p>
+  <a href="/policies/${ctx.policyId}/renew"
+     style="display:inline-block;margin-top:16px;padding:10px 20px;background:#d97706;color:#fff;border-radius:6px;text-decoration:none">
+    ${copy.cta}
+  </a>
+  <hr style="margin-top:32px;border:none;border-top:1px solid #e5e7eb"/>
+  <p style="font-size:12px;color:#9ca3af">${copy.unsubscribe}</p>
+</body>
+</html>`.trim();
+
+  return { subject, text, html };
+}
+
+/**
+ * Build a push notification payload for an upcoming policy expiry.
+ *
+ * The payload is delivered via a configurable webhook URL
+ * (PUSH_WEBHOOK_URL env var) to a mobile push gateway.
+ *
+ * Supports English ("en") and Spanish ("es") locales.
+ */
+export function PolicyExpiryPushTemplate(ctx: PolicyExpiryContext): {
+  title: string;
+  body: string;
+  data: Record<string, string | number>;
+} {
+  const locale = ctx.locale && EXPIRY_COPY[ctx.locale] ? ctx.locale : 'en';
+  const copy = EXPIRY_COPY[locale];
+  const vars = {
+    policyId: ctx.policyId,
+    timeToExpiry: ctx.timeToExpiry,
+    expiryLedger: ctx.expiryLedger,
+  };
+
+  return {
+    title: interpolate(copy.subject, vars),
+    body: interpolate(copy.body, vars),
+    data: {
+      type: 'policy_expiry',
+      policyId: ctx.policyId,
+      expiryLedger: ctx.expiryLedger,
+    },
+  };
+}

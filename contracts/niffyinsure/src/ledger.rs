@@ -72,6 +72,9 @@ pub const LEDGERS_PER_WEEK: u32 = 120_960;
 /// Default policy duration: ~30 days.
 pub const POLICY_DURATION_LEDGERS: u32 = 30 * LEDGERS_PER_DAY; // 518_400
 
+/// Default payout timeout for an approved but unpaid claim: ~7 days.
+pub const PAYOUT_TIMEOUT_LEDGERS: u32 = 7 * LEDGERS_PER_DAY; // 120_960
+
 /// Voting window: ~7 days from claim filing.
 /// Default value for [`crate::storage::get_voting_duration_ledgers`] and historical
 /// behaviour: new claims use `voting_deadline_ledger = filed_at + duration` where

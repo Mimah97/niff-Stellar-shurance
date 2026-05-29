@@ -2,6 +2,11 @@ import { getConfig } from '@/config/env';
 
 const { apiUrl: API_BASE_URL } = getConfig();
 
+export interface ClaimsConfig {
+  minEvidenceCount: number;
+  maxEvidenceCount: number;
+}
+
 export interface Claim {
   id: number;
   policyId: string;
@@ -32,6 +37,11 @@ export class ClaimAPI {
       throw new Error(errorData.message || 'API Error');
     }
     return response.json();
+  }
+
+  static async getConfig(): Promise<ClaimsConfig> {
+    const response = await fetch(`${API_BASE_URL}/api/claims/config`);
+    return this.handleResponse<ClaimsConfig>(response);
   }
 
   static async buildTransaction(data: {

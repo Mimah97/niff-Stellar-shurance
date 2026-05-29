@@ -113,22 +113,71 @@ export class IndexerService {
   }
 
   /** Bull reindex job: drain backlog for a network after cursor reset. */
-  async processUntilCaughtUp(network?: string): Promise<{ batches: number; events: number }> {
+  async processUntilCaughtUp(
+    network?: string,
+    jobId?: string,
+  ): Promise<{ batches: number; events: number }> {
     const net = network ?? this.networkId;
     let batches = 0;
     let events = 0;
+
+    const latestLedger = await this.soroban.getLatestLedger();
+    const cursorRow = await this.ensureCursor(net);
+    const startLedger = cursorRow.lastProcessedLedger + 1;
+    const totalLedgers = Math.max(0, latestLedger - cursorRow.lastProcessedLedger);
+
+    if (jobId) {
+      await this.prisma.reindexProgress.upsert({
+        where: { jobId },
+        create: {
+          jobId,
+          network: net,
+          startLedger,
+          targetLedger: latestLedger,
+          currentLedger: cursorRow.lastProcessedLedger,
+          totalEvents: totalLedgers,
+          status: 'running',
+        },
+        update: {
+          startLedger,
+          targetLedger: latestLedger,
+          currentLedger: cursorRow.lastProcessedLedger,
+          totalEvents: totalLedgers,
+          status: 'running',
+        },
+      });
+    }
+
     for (;;) {
       const r = await this.processNextBatchForNetwork(net);
       batches += 1;
       events += r.processed;
-      if (r.processed === 0) {
-        break;
+
+      if (jobId) {
+        const cursor = await this.prisma.ledgerCursor.findUnique({ where: { network: net } });
+        await this.prisma.reindexProgress.update({
+          where: { jobId },
+          data: {
+            currentLedger: cursor?.lastProcessedLedger ?? 0,
+            processedEvents: events,
+          },
+        });
       }
+
+      if (r.processed === 0) break;
       if (batches > 10_000) {
         this.logger.warn(`processUntilCaughtUp stopped after ${batches} batches (safety cap)`);
         break;
       }
     }
+
+    if (jobId) {
+      await this.prisma.reindexProgress.update({
+        where: { jobId },
+        data: { status: 'completed' },
+      });
+    }
+
     this.logger.log(`Reindex catch-up finished for ${net}: ${events} events in ${batches} batches`);
     return { batches, events };
   }
@@ -225,6 +274,14 @@ export class IndexerService {
     if (dedup) {
       const elapsed = now.getTime() - dedup.lastFiredAt.getTime();
       if (elapsed < this.gapCooldownMs) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'indexer_ledger_gap_suppressed',
+            network,
+            reason: 'cooldown_active',
+            cooldownRemainingMs: this.gapCooldownMs - elapsed,
+          }),
+        );
         return;
       }
     }

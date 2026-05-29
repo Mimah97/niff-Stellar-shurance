@@ -105,6 +105,7 @@ export class PrismaService
               durationMs: e.duration,
             }),
           );
+          this.metrics?.slowQueriesTotal.inc();
         }
         this.activeQueries = Math.max(0, this.activeQueries - 1);
         this.emitPoolMetrics();

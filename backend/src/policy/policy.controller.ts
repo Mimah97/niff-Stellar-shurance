@@ -1,8 +1,9 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PolicyService } from './policy.service';
 import { BuildTransactionDto } from './dto/build-transaction.dto';
+import { WalletRateLimitGuard } from '../rate-limit/wallet-rate-limit.guard';
 
 @ApiTags('Policy')
 @Controller('policy')
@@ -14,6 +15,7 @@ export class PolicyController {
    *
    * Returns unsigned XDR for Freighter / wallet-kit to sign.
    * Rate-limited (10 req/min) to protect Soroban RPC quotas.
+   * Per-wallet sliding window enforced via WalletRateLimitGuard.
    *
    * Errors: ACCOUNT_NOT_FOUND, WRONG_NETWORK, CONTRACT_NOT_DEPLOYED,
    *         SIMULATION_FAILED, INSUFFICIENT_BALANCE
@@ -21,6 +23,7 @@ export class PolicyController {
   @Post('build-transaction')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(WalletRateLimitGuard)
   @ApiOperation({ summary: 'Build unsigned initiate_policy transaction' })
   @ApiResponse({ status: 200, description: 'Unsigned transaction XDR + fee estimates' })
   @ApiResponse({ status: 400, description: 'Validation / account / simulation error' })

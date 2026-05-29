@@ -53,6 +53,8 @@ pub enum AdminError {
     SweepNoticePeriodActive = 116,
     /// Max evidence count outside the absolute hard bound.
     MaxEvidenceCountOutOfBounds = 117,
+    /// Payout asset override is not allowlisted.
+    PayoutAssetOverrideNotAllowlisted = 118,
 }
 
 /// Payload for a treasury-rotation proposal.
@@ -589,6 +591,26 @@ pub fn set_max_evidence_count(env: &Env, new_count: u32) -> Result<(), AdminErro
     MaxEvidenceCountUpdated {
         old_count,
         new_count,
+    }
+    .publish(env);
+    Ok(())
+}
+
+#[contractevent(topics = ["niffyinsure", "gateway_allowlist_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GatewayAllowlistUpdated {
+    pub gateway_count: u32,
+}
+
+/// Admin-only: update the allowlisted IPFS gateway URL prefixes for evidence validation.
+///
+/// Evidence URLs must start with `ipfs://` or one of the allowlisted gateway prefixes.
+/// Pass an empty vector to disable gateway validation (only `ipfs://` allowed).
+pub fn set_gateway_allowlist(env: &Env, gateways: Vec<String>) -> Result<(), AdminError> {
+    let _admin = require_admin(env);
+    storage::set_gateway_allowlist(env, &gateways);
+    GatewayAllowlistUpdated {
+        gateway_count: gateways.len(),
     }
     .publish(env);
     Ok(())

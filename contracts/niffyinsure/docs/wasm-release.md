@@ -94,11 +94,13 @@ After deploying, verify the on-chain wasm hash matches the expected value:
 # 1. Get the wasm hash from the artifact sidecar
 EXPECTED=$(awk '{print $1}' artifacts/niffyinsure-<version>-<tag>.wasm.sha256)
 
-# 2. Fetch the on-chain wasm hash via Stellar RPC
-ONCHAIN=$(stellar contract info --id <CONTRACT_ID> --network mainnet \
-  | jq -r '.wasm_hash')
+# 2. Read the on-chain wasm hash directly from the contract entrypoint
+ONCHAIN=$(stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --network mainnet \
+  -- get_wasm_hash)
 
-# 3. Compare
+# 3. Compare against the artifact-sidecar hash
 if [ "$EXPECTED" = "$ONCHAIN" ]; then
   echo "✅ Hash match: $ONCHAIN"
 else
@@ -106,6 +108,8 @@ else
   exit 1
 fi
 ```
+
+The contract hash returned by `get_wasm_hash()` is the canonical 32-byte WASM identifier used by Stellar RPC and the deployment registry. The hash is stored as a hex string in the artifact sidecar and should be compared byte-for-byte with the value returned by `get_wasm_hash()` after each upgrade.
 
 Record the expected hash in `contracts/deployment-registry.json` under `expectedWasmHash` for each network.
 

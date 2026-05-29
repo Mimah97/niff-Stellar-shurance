@@ -2,18 +2,22 @@ import {
   Controller,
   Get,
   Put,
+  Patch,
   Post,
   Body,
   Param,
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationsConsumer } from './notifications.consumer';
 import { UpdatePreferencesDto, TriggerEventDto } from './dto/update-preferences.dto';
 import { NotificationPreferenceKey } from './notification-preference.types';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { WalletAddress } from '../auth/decorators/wallet-address.decorator';
 
 const ALLOWED_PREFERENCE_KEYS: NotificationPreferenceKey[] = [
   'renewalRemindersEnabled',
@@ -74,6 +78,46 @@ export class NotificationsController {
     private readonly service: NotificationsService,
     private readonly consumer: NotificationsConsumer,
   ) {}
+
+  /**
+   * GET /api/notifications/preferences
+   * Returns notification preferences for authenticated wallet user.
+   * On first access, creates preference record with defaults.
+   */
+  @Get('preferences')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get authenticated user notification preferences' })
+  @ApiResponse({ status: 200, description: 'User notification preferences' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getAuthenticatedUserPreferences(
+    @WalletAddress() walletAddress: string,
+  ) {
+    return this.service.getUserNotificationPreferences(walletAddress);
+  }
+
+  /**
+   * PATCH /api/notifications/preferences
+   * Updates notification preferences for authenticated wallet user.
+   * Validates fields and applies only the provided fields.
+   */
+  @Patch('preferences')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update authenticated user notification preferences' })
+  @ApiResponse({ status: 200, description: 'Updated notification preferences' })
+  @ApiResponse({ status: 400, description: 'Invalid preferences' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async updateAuthenticatedUserPreferences(
+    @WalletAddress() walletAddress: string,
+    @Body() body: Record<string, unknown> | undefined,
+  ) {
+    const preferences = await this.service.updateUserNotificationPreferences(
+      walletAddress,
+      validateNotificationPreferenceUpdate(body),
+    );
+    return preferences;
+  }
 
   /**
    * GET /api/notifications/preferences/:publicKey

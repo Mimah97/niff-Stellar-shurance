@@ -60,9 +60,25 @@ export interface HorizonOperationRecord {
   amount?: string;
   from?: string;
   to?: string;
+  /** Decoded contract events from raw_events table. Present when enrichment succeeds. */
+  contractEvents?: DecodedEvent[];
+}
+
+export interface DecodedEvent {
+  eventIndex: number;
+  contractId: string;
+  ledger: number;
+  ledgerClosedAt: string;
+  topic1?: string;
+  topic2?: string;
+  topic3?: string;
+  topic4?: string;
+  data: unknown;
 }
 
 export interface HorizonTransactionResponse {
   records: HorizonOperationRecord[];
   next_cursor?: string;
+  /** False when enrichment failed — records are returned unenriched. */
+  eventsEnriched?: boolean;
 }

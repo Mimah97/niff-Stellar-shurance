@@ -95,6 +95,7 @@ fn inject_approved_claim(
         approve_votes: 3,
         reject_votes: 0,
         filed_at: 100,
+        eligible_voter_count: 0,
         appeal_open_deadline_ledger: 0,
         appeals_count: 0,
         appeal_deadline_ledger: 0,

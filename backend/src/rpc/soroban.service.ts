@@ -11,8 +11,11 @@ import {
   BadRequestException,
   ServiceUnavailableException,
   Optional,
+  OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import CircuitBreaker from 'opossum';
 import { MetricsService } from '../metrics/metrics.service';
 import { getNetworkConfig } from '../config/network.config';
 import { POLICY_BATCH_GET_MAX } from '../chain/chain.constants';
@@ -78,14 +81,68 @@ export interface FinalizeClaimResult {
   onChainStatus: string;
 }
 
+interface PendingSubmission {
+  transactionXdr: string;
+  timestamp: number;
+}
+
 @Injectable()
-export class SorobanService {
+export class SorobanService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SorobanService.name);
+  private circuitBreaker!: CircuitBreaker;
+  private pendingSubmissions: PendingSubmission[] = [];
+  private readonly cbThreshold: number;
+  private readonly cbResetMs: number;
+  private quoteCache = new Map<string, { result: unknown; timestamp: number }>();
+  private readonly quoteCacheTtlMs = 60_000;
 
   constructor(
     private readonly configService: ConfigService,
     @Optional() private readonly metricsService?: MetricsService,
-  ) {}
+  ) {
+    this.cbThreshold = this.configService.get<number>('SOROBAN_RPC_CIRCUIT_BREAKER_THRESHOLD', 5);
+    this.cbResetMs = this.configService.get<number>('SOROBAN_RPC_CIRCUIT_BREAKER_RESET_MS', 60_000);
+  }
+
+  onModuleInit(): void {
+    this.initCircuitBreaker();
+  }
+
+  onModuleDestroy(): void {
+    this.circuitBreaker?.shutdown();
+  }
+
+  private initCircuitBreaker(): void {
+    this.circuitBreaker = new CircuitBreaker(
+      async (fn: () => Promise<any>) => fn(),
+      {
+        timeout: 30_000,
+        maxFailures: this.cbThreshold,
+        resetTimeout: this.cbResetMs,
+        name: 'SorobanRpcCircuitBreaker',
+      } as any,
+    );
+
+    this.circuitBreaker.on('open', () => {
+      this.logger.warn('Soroban RPC circuit breaker opened');
+    });
+
+    this.circuitBreaker.on('halfOpen', () => {
+      this.logger.debug('Soroban RPC circuit breaker transitioning to half-open');
+    });
+
+    this.circuitBreaker.on('close', () => {
+      this.logger.debug('Soroban RPC circuit breaker closed');
+    });
+  }
+
+  isRpcHealthy(): boolean {
+    return !this.circuitBreaker?.opened;
+  }
+
+  getPendingSubmissions(): PendingSubmission[] {
+    return [...this.pendingSubmissions];
+  }
 
   /**
    * Wraps an RPC call with timing + metric recording.
@@ -236,6 +293,7 @@ export class SorobanService {
   /**
    * Simulate generate_premium(policy_type, region, age, risk_score) → i128.
    * Falls back to local computation if contract is not deployed.
+   * Returns cached responses when circuit breaker is open.
    */
   async simulateGeneratePremium(args: {
     policyType: PolicyTypeEnum;
@@ -244,9 +302,30 @@ export class SorobanService {
     riskScore: number;
     sourceAccount: string;
   }): Promise<SimulatePremiumResult> {
-    return this.trackRpc('simulate_generate_premium', () =>
-      this._simulateGeneratePremium(args),
-    );
+    const cacheKey = JSON.stringify(args);
+    const cached = this.quoteCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.quoteCacheTtlMs) {
+      this.logger.debug('Returning cached quote response');
+      return cached.result as SimulatePremiumResult;
+    }
+
+    const simulateFn = async () => {
+      const result = await this._simulateGeneratePremium(args);
+      this.quoteCache.set(cacheKey, { result, timestamp: Date.now() });
+      return result;
+    };
+
+    try {
+      return await this.trackRpc('simulate_generate_premium', async () =>
+        (await this.circuitBreaker.fire(simulateFn)) as SimulatePremiumResult,
+      );
+    } catch (err) {
+      if (this.circuitBreaker.opened && cached) {
+        this.logger.debug('Soroban RPC circuit is open, returning stale cached quote');
+        return cached.result as SimulatePremiumResult;
+      }
+      throw err;
+    }
   }
 
   private async _simulateGeneratePremium(args: {
@@ -533,9 +612,10 @@ export class SorobanService {
   /**
    * Submit a signed transaction to the Soroban RPC.
    * Expects base64-encoded XDR (envelope).
+   * When circuit is open, queue the transaction for retry instead of failing immediately.
    */
   async submitTransaction(transactionXdr: string): Promise<SorobanRpc.Api.SendTransactionResponse> {
-    return this.trackRpc('send_transaction', async () => {
+    const submitFn = async () => {
       const server = this.makeServer();
       const tx = TransactionBuilder.fromXDR(transactionXdr, this.networkPassphrase);
       try {
@@ -555,7 +635,46 @@ export class SorobanService {
           message: 'Failed to submit transaction to the network.',
         });
       }
-    });
+    };
+
+    try {
+      return await this.trackRpc('send_transaction', async () =>
+        (await this.circuitBreaker.fire(submitFn)) as SorobanRpc.Api.SendTransactionResponse,
+      );
+    } catch (err) {
+      if (this.circuitBreaker.opened) {
+        this.logger.debug('Soroban RPC circuit is open, queuing transaction for retry');
+        this.pendingSubmissions.push({
+          transactionXdr,
+          timestamp: Date.now(),
+        });
+        return {
+          status: 'PENDING',
+          hash: '',
+          errorResult: 'Transaction queued for retry when RPC recovers',
+        } as any;
+      }
+      throw err;
+    }
+  }
+
+  async processPendingSubmissions(): Promise<void> {
+    if (this.pendingSubmissions.length === 0 || this.circuitBreaker.opened) {
+      return;
+    }
+
+    const submissions = [...this.pendingSubmissions];
+    this.pendingSubmissions = [];
+
+    for (const submission of submissions) {
+      try {
+        await this.submitTransaction(submission.transactionXdr);
+        this.logger.debug('Processed pending transaction submission');
+      } catch (err) {
+        this.logger.error('Failed to process pending submission, requeuing', err);
+        this.pendingSubmissions.push(submission);
+      }
+    }
   }
 
   /**

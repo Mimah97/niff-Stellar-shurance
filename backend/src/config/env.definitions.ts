@@ -54,6 +54,7 @@ export interface EnvironmentVariables {
   NONCE_TTL_SECONDS: number;
   FRONTEND_ORIGINS: string;
   ADMIN_CORS_ORIGINS: string;
+  CORS_ALLOWED_ORIGINS: string;
   LOG_LEVEL: LogLevel;
   CACHE_TTL_SECONDS: number;
   QUOTE_SIMULATION_CACHE_ENABLED: 'true' | 'false' | '1' | '0';

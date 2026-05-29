@@ -112,12 +112,23 @@ async function bootstrap() {
   const frontendOrigins = parseOrigins(
     configService.get<string>("FRONTEND_ORIGINS") ?? "",
   );
+  // CORS_ALLOWED_ORIGINS is the canonical env var for the combined allowlist.
+  // When set it takes precedence; otherwise fall back to FRONTEND_ORIGINS + ADMIN_CORS_ORIGINS.
+  const corsAllowedOriginsRaw = configService.get<string>("CORS_ALLOWED_ORIGINS");
+  const allowedOrigins = corsAllowedOriginsRaw
+    ? parseOrigins(corsAllowedOriginsRaw)
+    : [...frontendOrigins, ...adminOrigins];
+
+  const isProduction = configService.get<string>("NODE_ENV") === "production";
 
   app.enableCors({
     origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean | string) => void) => {
       if (!origin) return cb(null, true); // server-to-server / same-origin
-      const allowed = [...frontendOrigins, ...adminOrigins];
-      if (allowed.includes(origin)) return cb(null, origin); // echo exact origin
+      // Reject wildcard in production
+      if (isProduction && allowedOrigins.includes("*")) {
+        return cb(new Error("Wildcard origin not allowed in production"), false);
+      }
+      if (allowedOrigins.includes(origin)) return cb(null, origin); // echo exact origin
       return cb(new Error("Not allowed by CORS"), false); // triggers 403
     },
     credentials: true,

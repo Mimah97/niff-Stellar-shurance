@@ -184,6 +184,16 @@ pub struct ClaimRejected {
     pub at_ledger: u32,
 }
 
+/// Emitted when an approved payout is still unprocessed after its deadline.
+#[contractevent(topics = ["niffyinsure", "payout_timed_out"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutTimedOut {
+    #[topic]
+    pub claim_id: u64,
+    pub deadline_ledger: u32,
+    pub at_ledger: u32,
+}
+
 /// Emitted every time a rejection increments the policy's strike counter.
 /// Indexers should use this event to notify holders of accumulating strikes
 /// before the threshold triggers deactivation.
@@ -298,6 +308,9 @@ pub fn file_claim(
     let claim_id = storage::next_claim_id(env);
     let mut status_history: Vec<ClaimStatusHistoryEntry> = Vec::new(env);
     push_status_transition(&mut status_history, ClaimStatus::Processing, now);
+    storage::snapshot_claim_voters(env, claim_id);
+    let eligible_voter_count = storage::get_claim_voters(env, claim_id).len();
+
     let claim = Claim {
         claim_id,
         policy_id,
@@ -309,9 +322,11 @@ pub fn file_claim(
         evidence: evidence.clone(),
         status: ClaimStatus::Processing,
         voting_deadline_ledger,
+        payout_deadline_ledger: 0,
         approve_votes: 0,
         reject_votes: 0,
         filed_at: now,
+        eligible_voter_count,
         appeal_open_deadline_ledger: 0,
         appeals_count: 0,
         appeal_deadline_ledger: 0,
@@ -322,7 +337,6 @@ pub fn file_claim(
 
     storage::set_claim(env, &claim);
     storage::set_open_claim(env, holder, policy_id, true);
-    storage::snapshot_claim_voters(env, claim_id);
     storage::set_claim_quorum_bps(env, claim_id, storage::get_quorum_bps(env));
     storage::set_last_claim_ledger(env, holder, now);
     storage::set_claim_rate_limit_prev(env, claim_id, rate_limit_anchor_before_filing);
@@ -451,7 +465,7 @@ pub fn vote_on_claim(
         VoteOption::Reject => claim.reject_votes += 1,
     }
 
-    let eligible = snapshot.len();
+    let eligible = claim.eligible_voter_count;
     let cast = claim.approve_votes + claim.reject_votes;
     let quorum_bps = storage::get_claim_quorum_bps(env, claim_id);
     if let Some(res) = resolve_plurality_if_quorum_met(
@@ -470,6 +484,9 @@ pub fn vote_on_claim(
     }
 
     if claim.status != status_before {
+        if claim.status == ClaimStatus::Approved && claim.payout_deadline_ledger == 0 {
+            claim.payout_deadline_ledger = now.saturating_add(ledger::PAYOUT_TIMEOUT_LEDGERS);
+        }
         push_status_transition(&mut claim.status_history, claim.status.clone(), now);
     }
 
@@ -528,8 +545,7 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
 
     let status_before = claim.status.clone();
 
-    let voters = storage::get_claim_voters(env, claim_id);
-    let eligible = voters.len();
+    let eligible = claim.eligible_voter_count;
     let cast = claim.approve_votes + claim.reject_votes;
     let quorum_bps = storage::get_claim_quorum_bps(env, claim_id);
 
@@ -548,6 +564,9 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
     }
 
     if claim.status != status_before {
+        if claim.status == ClaimStatus::Approved && claim.payout_deadline_ledger == 0 {
+            claim.payout_deadline_ledger = now.saturating_add(ledger::PAYOUT_TIMEOUT_LEDGERS);
+        }
         push_status_transition(&mut claim.status_history, claim.status.clone(), now);
     }
 
@@ -592,6 +611,35 @@ pub fn process_deadline(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
         return Err(Error::ClaimNotProcessing);
     }
     finalize_claim_inner(env, claim_id)
+}
+
+/// Permissionless keeper: auto-reject an approved claim once its payout deadline has passed.
+pub fn process_payout_timeout(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> {
+    let mut claim = storage::get_claim(env, claim_id).ok_or(Error::ClaimNotFound)?;
+
+    if claim.status != ClaimStatus::Approved {
+        return Err(Error::ClaimNotApproved);
+    }
+
+    let now = env.ledger().sequence();
+    if now <= claim.payout_deadline_ledger {
+        return Err(Error::PayoutDeadlineNotReached);
+    }
+
+    claim.status = ClaimStatus::PayoutTimeout;
+    push_status_transition(&mut claim.status_history, ClaimStatus::PayoutTimeout, now);
+    storage::set_open_claim(env, &claim.claimant, claim.policy_id, false);
+    storage::remove_claim_rate_limit_prev(env, claim_id);
+    storage::set_claim(env, &claim);
+
+    PayoutTimedOut {
+        claim_id,
+        deadline_ledger: claim.payout_deadline_ledger,
+        at_ledger: now,
+    }
+    .publish(env);
+
+    Ok(claim.status)
 }
 
 // ── process_claim (admin payout trigger) ─────────────────────────────────────
@@ -737,6 +785,19 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         return Err(Error::InvalidAsset);
     }
 
+    // Resolve effective payout asset: use PolicyTypeConfig override when set,
+    // otherwise fall back to the policy's bound premium asset.
+    let type_config = storage::get_policy_type_config(env, &policy.policy_type);
+    let effective_asset = type_config
+        .as_ref()
+        .and_then(|c| c.payout_asset_override.clone())
+        .unwrap_or_else(|| policy.asset.clone());
+
+    // The override asset must also be allowlisted at payout time.
+    if !storage::is_allowed_asset(env, &effective_asset) {
+        return Err(Error::InvalidAsset);
+    }
+
     let gross = claim.amount;
     let deductible = claim.deductible;
     let net = gross.checked_sub(deductible).ok_or(Error::Overflow)?;
@@ -745,7 +806,7 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         return Err(Error::ClaimAmountZero);
     }
 
-    if !crate::token::check_balance(env, &policy.asset, net) {
+    if !crate::token::check_balance(env, &effective_asset, net) {
         return Err(Error::InsufficientTreasury);
     }
 
@@ -754,9 +815,21 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         .clone()
         .unwrap_or_else(|| policy.holder.clone());
 
+    // Emit override event before the transfer so indexers see the asset decision first.
+    let override_active = effective_asset != policy.asset;
+    if override_active {
+        crate::events::emit_payout_asset_override_applied(
+            env,
+            claim.claim_id,
+            policy.policy_type.clone(),
+            &policy.asset,
+            &effective_asset,
+        );
+    }
+
     crate::token::transfer(
         env,
-        &policy.asset,
+        &effective_asset,
         &env.current_contract_address(),
         &payout_to,
         net,

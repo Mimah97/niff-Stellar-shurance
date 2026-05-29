@@ -10,7 +10,7 @@
           "expectedVersion": "${NIFFYINSURE_EXPECTED_VERSION}",
           "deployedVersion": "",
           "deployedAt": "",
-          "notes": "Testnet deployment. Set CONTRACT_ID_TESTNET env var. Run `sha256sum niffyinsure.wasm` after each build. After deploy, simulate version() and record result in deployedVersion."
+          "notes": "Testnet deployment. Set CONTRACT_ID_TESTNET env var. Run `sha256sum niffyinsure.wasm` after each build. After deploy, invoke `get_wasm_hash()` and compare it with `expectedWasmHash`, then record the deployed version in deployedVersion."
         }
       ]
     },
@@ -23,7 +23,7 @@
           "expectedVersion": "${NIFFYINSURE_EXPECTED_VERSION}",
           "deployedVersion": "",
           "deployedAt": "",
-          "notes": "Mainnet deployment. CONTRACT_ID_MAINNET is REQUIRED at startup — server refuses to start without it. After deploy, simulate version() and record result in deployedVersion. Alert if deployedVersion != expectedVersion."
+          "notes": "Mainnet deployment. CONTRACT_ID_MAINNET is REQUIRED at startup — server refuses to start without it. After deploy, invoke `get_wasm_hash()` and compare it with `expectedWasmHash`, then record the deployed version in deployedVersion. Alert if deployedVersion != expectedVersion."
         }
       ]
     },
@@ -36,7 +36,7 @@
           "expectedVersion": "${NIFFYINSURE_EXPECTED_VERSION}",
           "deployedVersion": "",
           "deployedAt": "",
-          "notes": "Futurenet deployment. Set CONTRACT_ID_FUTURENET env var. After deploy, simulate version() and record result in deployedVersion."
+          "notes": "Futurenet deployment. Set CONTRACT_ID_FUTURENET env var. After deploy, invoke `get_wasm_hash()` and compare it with `expectedWasmHash`, then record the deployed version in deployedVersion."
         }
       ]
     }

@@ -53,6 +53,8 @@ pub enum Error {
     VotingWindowStillOpen = 40,
     NotEligibleVoter = 41,
     RateLimitExceeded = 42,
+    /// Evidence URL does not match IPFS or allowlisted gateway format.
+    InvalidEvidenceUrl = 43,
     /// Admin `set_voting_duration_ledgers` value outside allowed [min, max] range.
     VotingDurationOutOfBounds = 49,
     /// Batch get exceeded POLICY_BATCH_GET_MAX.
@@ -67,6 +69,8 @@ pub enum Error {
     ClaimNotProcessing = 53,
     /// New claim would exceed the rolling per-policy paid-amount cap for the current window.
     RollingClaimCapExceeded = 54,
+    /// Keeper `process_payout_timeout` called before the approved payout deadline elapsed.
+    PayoutDeadlineNotReached = 55,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
@@ -144,6 +148,8 @@ pub fn check_claim_fields(
             // `ExcessiveEvidenceBytes` is the reserved evidence bucket (no dedicated enum slot left).
             return Err(Error::ExcessiveEvidenceBytes);
         }
+        // Validate evidence URL format
+        validate_evidence_url(env, &entry.url)?;
     }
     let _ = env;
     Ok(())
@@ -400,4 +406,107 @@ pub fn check_multiplier_table_shape(table: &MultiplierTable) -> Result<(), Error
         return Err(Error::MissingCoverageMultiplier);
     }
     Ok(())
+}
+
+/// Validate evidence URL format: must be `ipfs://` or match an allowlisted gateway prefix.
+pub fn validate_evidence_url(env: &Env, url: &String) -> Result<(), Error> {
+    let url_str = url.to_xdr(env);
+    
+    // Check for ipfs:// prefix
+    if url_str.len() >= 7 {
+        let prefix = &url_str[..7];
+        if prefix == b"ipfs://" {
+            return Ok(());
+        }
+    }
+    
+    // Check against allowlisted gateway prefixes
+    let gateways = crate::storage::get_gateway_allowlist(env);
+    for gateway in gateways.iter() {
+        let gateway_str = gateway.to_xdr(env);
+        if url_str.len() >= gateway_str.len() {
+            let url_prefix = &url_str[..gateway_str.len()];
+            if url_prefix == gateway_str.as_slice() {
+                return Ok(());
+            }
+        }
+    }
+    
+    Err(Error::InvalidEvidenceUrl)
+}
+
+#[cfg(test)]
+mod evidence_url_validation_tests {
+    use super::*;
+    use soroban_sdk::{Env, String};
+
+    #[test]
+    fn ipfs_prefix_is_valid() {
+        let env = Env::default();
+        let contract_id = env.register(crate::NiffyInsure, ());
+        let url = String::from_str(&env, "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi");
+        env.as_contract(&contract_id, || {
+            assert!(validate_evidence_url(&env, &url).is_ok());
+        });
+    }
+
+    #[test]
+    fn empty_string_is_invalid() {
+        let env = Env::default();
+        let contract_id = env.register(crate::NiffyInsure, ());
+        let url = String::from_str(&env, "");
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                validate_evidence_url(&env, &url).unwrap_err(),
+                Error::InvalidEvidenceUrl
+            );
+        });
+    }
+
+    #[test]
+    fn invalid_url_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::NiffyInsure, ());
+        let url = String::from_str(&env, "https://example.com/file");
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                validate_evidence_url(&env, &url).unwrap_err(),
+                Error::InvalidEvidenceUrl
+            );
+        });
+    }
+
+    #[test]
+    fn allowlisted_gateway_is_valid() {
+        let env = Env::default();
+        let contract_id = env.register(crate::NiffyInsure, ());
+        env.as_contract(&contract_id, || {
+            // Set up gateway allowlist
+            let mut gateways = soroban_sdk::Vec::new(&env);
+            gateways.push_back(String::from_str(&env, "https://gateway.pinata.cloud/ipfs/"));
+            crate::storage::set_gateway_allowlist(&env, &gateways);
+
+            let url = String::from_str(&env, "https://gateway.pinata.cloud/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi");
+            assert!(validate_evidence_url(&env, &url).is_ok());
+        });
+    }
+
+    #[test]
+    fn non_allowlisted_gateway_is_invalid() {
+        let env = Env::default();
+        let contract_id = env.register(crate::NiffyInsure, ());
+        env.as_contract(&contract_id, || {
+            // Set up gateway allowlist with one gateway
+            let mut gateways = soroban_sdk::Vec::new(&env);
+            gateways.push_back(String::from_str(&env, "https://gateway.pinata.cloud/ipfs/"));
+            crate::storage::set_gateway_allowlist(&env, &gateways);
+
+            // Try a different gateway
+            let url = String::from_str(&env, "https://other-gateway.com/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi");
+            assert_eq!(
+                validate_evidence_url(&env, &url).unwrap_err(),
+                Error::InvalidEvidenceUrl
+            );
+        });
+    }
 }

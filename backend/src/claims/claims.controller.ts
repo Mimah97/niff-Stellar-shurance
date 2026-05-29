@@ -12,6 +12,8 @@ import {
   Body,
   Res,
   BadRequestException,
+  NotFoundException,
+  ForbiddenException,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -32,11 +34,12 @@ import { ClaimsListResponseDto, ClaimDetailResponseDto } from './dto/claim.dto';
 import { BuildClaimTransactionDto } from './dto/build-claim-transaction.dto';
 import { SubmitTransactionDto } from './dto/submit-transaction.dto';
 import { EvidenceUploadService } from './services/evidence-upload.service';
-import { ClaimHistoryService } from './services/claim-history.service';
+import { EvidenceProxyService } from './services/evidence-proxy.service';
 import { EVIDENCE_MAX_BYTES_DEFAULT } from './dto/evidence-upload.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { WalletAddress } from '../auth/decorators/wallet-address.decorator';
 import { RateLimitGuard } from '../rate-limit/rate-limit.guard';
+import { ClaimRateLimitGuard } from '../rate-limit/claim-rate-limit.guard';
 import { MAX_LIMIT, DEFAULT_LIMIT } from '../helpers/pagination';
 import { OptionalJwtAuthGuard } from '../tx/guards/optional-jwt.guard';
 
@@ -49,7 +52,7 @@ export class ClaimsController {
   constructor(
     private readonly claimsService: ClaimsService,
     private readonly evidenceUploadService: EvidenceUploadService,
-    private readonly claimHistoryService: ClaimHistoryService,
+    private readonly evidenceProxyService: EvidenceProxyService,
   ) {}
 
   @Post('evidence/upload')
@@ -156,18 +159,20 @@ export class ClaimsController {
     return this.claimsService.getClaimById(id, walletAddress);
   }
 
-  @Get(':id/history')
-  @ApiOperation({ summary: 'Get paginated status transition history for a claim' })
-  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'Opaque pagination cursor' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (max 100)' })
-  @ApiResponse({ status: 200, description: 'Paginated status history in ledger order' })
-  @ApiResponse({ status: 404, description: 'Claim not found' })
-  async getClaimHistory(
+  @Get(':id/evidence/:index')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Download claim evidence file via authenticated IPFS proxy' })
+  @ApiResponse({ status: 200, description: 'Evidence file stream' })
+  @ApiResponse({ status: 403, description: 'Forbidden — not the claimant, a voter, or an admin' })
+  @ApiResponse({ status: 404, description: 'Claim or evidence index not found' })
+  async downloadEvidence(
     @Param('id', ParseIntPipe) id: number,
-    @Query('cursor') cursor?: string,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit?: number,
-  ) {
-    return this.claimHistoryService.getHistory(id, cursor, limit);
+    @Param('index', ParseIntPipe) index: number,
+    @WalletAddress() walletAddress: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    await this.evidenceProxyService.stream(id, index, walletAddress, res);
   }
 
   @Post('build-transaction')
@@ -186,7 +191,7 @@ export class ClaimsController {
   }
 
   @Post('submit')
-  @UseGuards(RateLimitGuard)
+  @UseGuards(ClaimRateLimitGuard, RateLimitGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Submit signed claim transaction' })
   @ApiResponse({ status: 200, description: 'Transaction submitted' })

@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { Queue } from 'bullmq';
 import { getBullMQConnection } from '../redis/client';
+import { Prisma } from '@prisma/client';
 
 export interface BackfillJobInfo {
   jobId: string;
@@ -55,8 +56,47 @@ export class AdminService {
       { fromLedger, network },
       { jobId: `reindex-${network}-${fromLedger}-${Date.now()}` },
     );
-    this.logger.log(`Reindex job enqueued: ${job.id} network=${network} fromLedger=${fromLedger}`);
-    return job.id!;
+    const jobId = job.id!;
+
+    // Seed progress row so status is queryable immediately after enqueue.
+    await this.prisma.reindexProgress.upsert({
+      where: { jobId },
+      create: { jobId, network, startLedger: fromLedger, status: 'running' },
+      update: { status: 'running', startLedger: fromLedger },
+    });
+
+    this.logger.log(`Reindex job enqueued: ${jobId} network=${network} fromLedger=${fromLedger}`);
+    return jobId;
+  }
+
+  async getReindexStatus(network: string): Promise<{
+    jobId: string;
+    network: string;
+    currentLedger: number;
+    targetLedger: number;
+    percentage: number;
+    status: string;
+    startedAt: Date;
+  } | null> {
+    const row = await this.prisma.reindexProgress.findFirst({
+      where: { network },
+      orderBy: { startTime: 'desc' },
+    });
+    if (!row) return null;
+
+    const range = row.targetLedger - row.startLedger;
+    const done = row.currentLedger - row.startLedger;
+    const percentage = range > 0 ? Math.min(100, Math.round((done / range) * 100)) : 100;
+
+    return {
+      jobId: row.jobId,
+      network: row.network,
+      currentLedger: row.currentLedger,
+      targetLedger: row.targetLedger,
+      percentage,
+      status: row.status,
+      startedAt: row.startTime,
+    };
   }
 
   /**
@@ -116,7 +156,100 @@ export class AdminService {
     };
   }
 
+  async searchClaims(options: {
+    q?: string;
+    status?: string;
+    claimant?: string;
+    policyId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    after?: string;
+    limit?: number;
+  }) {
+    const DEFAULT_LIMIT = 20;
+    const MAX_LIMIT = 100;
+    const limit = Math.min(options.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+
+    // Build where conditions
+    const where: Prisma.ClaimWhereInput = {
+      deletedAt: null, // Exclude soft-deleted
+    };
+
+    // Full-text search on description (case-insensitive contains)
+    if (options.q) {
+      where.description = {
+        contains: options.q,
+        mode: 'insensitive',
+      };
+    }
+
+    // Status filter
+    if (options.status) {
+      where.status = options.status as any;
+    }
+
+    // Claimant (creator) filter
+    if (options.claimant) {
+      where.creatorAddress = options.claimant;
+    }
+
+    // Policy filter
+    if (options.policyId) {
+      where.policyId = options.policyId;
+    }
+
+    // Date range filters
+    const dateConditions: Prisma.DateTimeFilter = {};
+    if (options.dateFrom) {
+      (dateConditions as any).gte = new Date(options.dateFrom);
+    }
+    if (options.dateTo) {
+      (dateConditions as any).lte = new Date(options.dateTo);
+    }
+    if (Object.keys(dateConditions).length > 0) {
+      where.createdAt = dateConditions;
+    }
+
+    // Keyset pagination: decode cursor
+    let skipId: number | undefined;
+    if (options.after) {
+      try {
+        const decoded = Buffer.from(options.after, 'base64').toString('utf-8');
+        skipId = parseInt(decoded, 10);
+        if (Number.isNaN(skipId)) skipId = undefined;
+      } catch {
+        skipId = undefined;
+      }
+    }
+
+    // Fetch one extra record to determine if there's a next page
+    const claims = await this.prisma.claim.findMany({
+      where,
+      orderBy: { createdAt: 'desc', id: 'desc' },
+      take: limit + 1,
+      skip: skipId ? 1 : 0,
+      cursor: skipId ? { id: skipId } : undefined,
+    });
+
+    const hasNextPage = claims.length > limit;
+    const data = claims.slice(0, limit);
+    const nextCursor = hasNextPage ? Buffer.from(String(data[data.length - 1]?.id ?? '')).toString('base64') : null;
+
+    // Get total count
+    const total = await this.prisma.claim.count({ where });
+
+    return {
+      data,
+      pagination: {
+        total,
+        nextCursor,
+        hasNextPage,
+      },
+    };
+  }
+
   async setFeatureFlag(key: string, enabled: boolean, description: string | undefined, actor: string) {
+    this.featureFlagsService.assertAllowlisted(key);
     const result = await this.prisma.featureFlag.upsert({
       where: { key },
       create: { key, enabled, description, updatedBy: actor },
@@ -126,7 +259,100 @@ export class AdminService {
     return result;
   }
 
+  async createFeatureFlag(key: string, enabled: boolean, description: string | undefined, actor: string) {
+    this.featureFlagsService.assertAllowlisted(key);
+    const result = await this.prisma.featureFlag.create({
+      data: { key, enabled, description: description ?? null, updatedBy: actor },
+    });
+    await this.featureFlagsService.refreshFlags();
+    return result;
+  }
+
   async getFeatureFlags() {
     return this.prisma.featureFlag.findMany({ orderBy: { key: 'asc' } });
+  }
+
+  async exportPoliciesCSV(options: {
+    status?: string;
+    holderAddress?: string;
+    policyType?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    pageSize?: number;
+  }) {
+    const DEFAULT_PAGE_SIZE = 100;
+    const pageSize = Math.min(options.pageSize ?? DEFAULT_PAGE_SIZE, 1000);
+
+    // Build where conditions
+    const where: Prisma.PolicyWhereInput = {
+      deletedAt: null, // Exclude soft-deleted
+    };
+
+    // Status filter maps to isActive (active=true, inactive=false)
+    if (options.status) {
+      where.isActive = options.status.toLowerCase() === 'active';
+    }
+
+    if (options.holderAddress) {
+      where.holderAddress = options.holderAddress;
+    }
+
+    if (options.policyType) {
+      where.policyType = options.policyType;
+    }
+
+    const dateConditions: Prisma.DateTimeFilter = {};
+    if (options.dateFrom) {
+      (dateConditions as any).gte = new Date(options.dateFrom);
+    }
+    if (options.dateTo) {
+      (dateConditions as any).lte = new Date(options.dateTo);
+    }
+    if (Object.keys(dateConditions).length > 0) {
+      where.createdAt = dateConditions;
+    }
+
+    // CSV headers
+    const headers = ['id', 'holderAddress', 'policyType', 'isActive', 'createdAt', 'updatedAt'];
+    const rows: string[] = [headers.map(h => `"${h}"`).join(',')];
+
+    // Stream rows using cursor pagination
+    let cursor: string | undefined;
+    let hasMore = true;
+
+    while (hasMore) {
+      const policies = await this.prisma.policy.findMany({
+        where,
+        orderBy: { id: 'asc' },
+        take: pageSize + 1,
+        skip: cursor ? 1 : 0,
+        cursor: cursor ? { id: cursor } : undefined,
+      });
+
+      if (policies.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      hasMore = policies.length > pageSize;
+      const batch = policies.slice(0, pageSize);
+
+      for (const policy of batch) {
+        rows.push([
+          `"${policy.id}"`,
+          `"${policy.holderAddress}"`,
+          `"${policy.policyType}"`,
+          `"${policy.isActive}"`,
+          `"${policy.createdAt.toISOString()}"`,
+          `"${policy.updatedAt.toISOString()}"`,
+        ].join(','));
+      }
+
+      if (hasMore) {
+        cursor = batch[batch.length - 1].id;
+      }
+    }
+
+    return rows.join('\n');
   }
 }

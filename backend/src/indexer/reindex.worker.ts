@@ -63,7 +63,7 @@ export class ReindexWorkerService implements OnModuleInit, OnModuleDestroy {
 
     this.logger.log(`Starting reindex job ${job.id} for network ${net}`);
 
-    const result = await this.indexer.processUntilCaughtUp(net);
+    const result = await this.indexer.processUntilCaughtUp(net, job.id);
 
     this.logger.log(
       `Reindex job ${job.id} complete: ${result.events} events in ${result.batches} batches`,

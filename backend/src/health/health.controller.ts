@@ -8,6 +8,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { PrismaHealthIndicator } from './prisma.health';
 import { RedisHealthIndicator } from './redis.health';
+import { SorobanRpcHealthIndicator } from './soroban-rpc.health';
 
 @ApiTags('health')
 @Controller('health')
@@ -16,6 +17,7 @@ export class HealthController {
     private health: HealthCheckService,
     private prismaHealth: PrismaHealthIndicator,
     private redisHealth: RedisHealthIndicator,
+    private sorobanRpcHealth: SorobanRpcHealthIndicator,
   ) {}
 
   @Get()
@@ -27,6 +29,7 @@ export class HealthController {
     return this.health.check([
       (): Promise<HealthIndicatorResult> => this.prismaHealth.isHealthy('prisma'),
       (): Promise<HealthIndicatorResult> => this.redisHealth.isHealthy('redis'),
+      (): Promise<HealthIndicatorResult> => this.sorobanRpcHealth.isHealthy('soroban_rpc'),
     ]);
   }
 }

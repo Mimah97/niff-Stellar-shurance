@@ -115,7 +115,7 @@
 //! See those modules for field-level documentation.
 
 use crate::types::{ClaimStatus, VoteOption};
-use soroban_sdk::{contractevent, Address, BytesN, Env, Vec};
+use soroban_sdk::{contractevent, Address, BytesN, Env, String, Vec};
 
 /// Bump this when any event payload has a breaking change (semver-major release).
 pub const EVENT_SCHEMA_VERSION: u32 = 1;
@@ -317,7 +317,7 @@ pub fn emit_premium_table_updated(env: &Env, table_version: u32) {
     .publish(env);
 }
 
-/// Emitted by `set_allowed_asset`.
+/// Emitted by `set_allowed_asset` on every call (idempotent — emitted even if state unchanged).
 /// topics: (NS, "asset_set", asset)
 /// payload: AssetAllowlistedData
 #[contractevent(topics = ["niffyins", "asset_set"])]
@@ -328,13 +328,25 @@ pub struct AssetAllowlistedData {
     pub version: u32,
     /// 1 = added to allowlist, 0 = removed.
     pub allowed: u32,
+    /// Human-readable ticker hint (e.g. "USDC"). Empty string on removal.
+    pub symbol_hint: String,
+    /// Token decimal places (e.g. 7 for XLM). 0 on removal.
+    pub decimals: u32,
 }
 
-pub fn emit_asset_allowlisted(env: &Env, asset: &Address, allowed: bool) {
+pub fn emit_asset_allowlisted(
+    env: &Env,
+    asset: &Address,
+    allowed: bool,
+    symbol_hint: String,
+    decimals: u32,
+) {
     AssetAllowlistedData {
         asset: asset.clone(),
         version: EVENT_SCHEMA_VERSION,
         allowed: if allowed { 1 } else { 0 },
+        symbol_hint,
+        decimals,
     }
     .publish(env);
 }
@@ -466,6 +478,82 @@ pub fn emit_drained(env: &Env, admin: &Address, recipient: &Address, amount: i12
         version: EVENT_SCHEMA_VERSION,
         recipient: recipient.clone(),
         amount,
+    }
+    .publish(env);
+}
+
+// ── Payout asset override event ───────────────────────────────────────────────
+
+/// Emitted by `process_claim` when a `PolicyTypeConfig.payout_asset_override` is applied.
+///
+/// topics: ("niffyinsure", "payout_asset_override_applied", claim_id)
+/// payload: { version, policy_type, premium_asset, payout_asset }
+///
+/// Indexers should surface this event so holders can see that their payout
+/// was settled in a different asset than the one used for their premium.
+#[contractevent(topics = ["niffyinsure", "payout_asset_override_applied"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutAssetOverrideApplied {
+    #[topic]
+    pub claim_id: u64,
+    pub version: u32,
+    /// The policy type whose config triggered the override.
+    pub policy_type: crate::types::PolicyType,
+    /// Asset the premium was paid in (policy's bound asset).
+    pub premium_asset: Address,
+    /// Asset the payout was sent in (the override asset).
+    pub payout_asset: Address,
+}
+
+pub fn emit_payout_asset_override_applied(
+    env: &Env,
+    claim_id: u64,
+    policy_type: crate::types::PolicyType,
+    premium_asset: &Address,
+    payout_asset: &Address,
+) {
+    PayoutAssetOverrideApplied {
+        claim_id,
+        version: EVENT_SCHEMA_VERSION,
+        policy_type,
+        premium_asset: premium_asset.clone(),
+        payout_asset: payout_asset.clone(),
+    }
+    .publish(env);
+}
+
+// ── Per-asset premium table event ─────────────────────────────────────────────
+
+/// Emitted by `admin_set_asset_premium_table` when an asset-specific table is set or cleared.
+///
+/// topics: ("niffyinsure", "asset_premium_table_set", asset)
+/// payload: { version, table_version, cleared }
+///
+/// `cleared = 1` means the table was removed (fallback to global default).
+/// `cleared = 0` means a new table was stored; `table_version` is its version field.
+#[contractevent(topics = ["niffyinsure", "asset_premium_table_set"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetPremiumTableSet {
+    #[topic]
+    pub asset: Address,
+    pub version: u32,
+    /// Version field from the stored `MultiplierTable` (0 when cleared).
+    pub table_version: u32,
+    /// 1 = table removed (fallback to default), 0 = table stored.
+    pub cleared: u32,
+}
+
+pub fn emit_asset_premium_table_set(
+    env: &Env,
+    asset: &Address,
+    table_version: u32,
+    cleared: bool,
+) {
+    AssetPremiumTableSet {
+        asset: asset.clone(),
+        version: EVENT_SCHEMA_VERSION,
+        table_version,
+        cleared: if cleared { 1 } else { 0 },
     }
     .publish(env);
 }

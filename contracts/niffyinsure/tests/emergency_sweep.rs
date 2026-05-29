@@ -138,7 +138,7 @@ fn sweep_succeeds_after_allowlisting_asset() {
     let recipient = Address::generate(&env);
 
     // Allowlist token2
-    client.set_allowed_asset(&token2, &true);
+    client.set_allowed_asset(&token2, &true, &soroban_sdk::String::from_str(&env, "TKN2"), &7u32);
 
     mint(&env, &token2, &contract_id, 1_000_000);
 
@@ -215,6 +215,7 @@ fn sweep_reverts_when_violating_protected_balance() {
         approve_votes: 10,
         reject_votes: 0,
         filed_at: 100,
+        eligible_voter_count: 0,
         appeal_open_deadline_ledger: 0,
         appeals_count: 0,
         appeal_deadline_ledger: 0,
@@ -280,6 +281,7 @@ fn sweep_ignores_paid_claims_in_protected_balance() {
         approve_votes: 10,
         reject_votes: 0,
         filed_at: 100,
+        eligible_voter_count: 0,
         appeal_open_deadline_ledger: 0,
         appeals_count: 0,
         appeal_deadline_ledger: 0,

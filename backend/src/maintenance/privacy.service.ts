@@ -1,4 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
+import * as nodemailer from 'nodemailer';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../admin/audit.service';
 
@@ -11,6 +14,7 @@ export class PrivacyService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -19,12 +23,11 @@ export class PrivacyService {
    *
    * IMMUTABILITY NOTE: on-chain policy/claim records and IPFS-pinned documents
    * cannot be erased. This procedure only affects mutable off-chain DB rows.
-   * Do NOT promise on-chain erasure to users.
    */
   async handleRequest(opts: {
     subjectWalletAddress: string;
     requestType: PrivacyRequestType;
-    requestedBy: string; // staff actor
+    requestedBy: string;
     ipAddress?: string;
     notes?: string;
   }): Promise<{ requestId: string; rowsAffected: number }> {
@@ -72,39 +75,123 @@ export class PrivacyService {
     });
 
     if (status === 'FAILED') throw new Error(`Privacy request failed: ${errorMessage}`);
+
+    await this.notifyStaff(opts.requestedBy, request.id, opts.subjectWalletAddress, rowsAffected);
+
     return { requestId: request.id, rowsAffected };
   }
 
-  /** Replace PII fields with redacted placeholders. Wallet address is retained for audit continuity. */
+  /**
+   * Process a privacy request by ID (idempotent).
+   * Re-running on an already-COMPLETED request returns the existing result without re-processing.
+   */
+  async processRequest(requestId: string): Promise<{ requestId: string; rowsAffected: number }> {
+    const req = await this.prisma.privacyRequest.findUnique({ where: { id: requestId } });
+    if (!req) throw new NotFoundException(`Privacy request ${requestId} not found`);
+
+    // Idempotent: already completed — return existing result without re-processing
+    if (req.status === 'COMPLETED') {
+      return { requestId: req.id, rowsAffected: req.rowsAffected };
+    }
+
+    let rowsAffected = 0;
+    let status: 'COMPLETED' | 'FAILED' = 'COMPLETED';
+    let errorMessage: string | undefined;
+
+    try {
+      rowsAffected =
+        req.requestType === 'ANONYMIZE'
+          ? await this.anonymize(req.subjectWalletAddress)
+          : await this.delete(req.subjectWalletAddress);
+    } catch (err) {
+      status = 'FAILED';
+      errorMessage = (err as Error).message;
+      this.logger.error(`processRequest ${requestId} failed: ${errorMessage}`);
+    }
+
+    await this.prisma.privacyRequest.update({
+      where: { id: requestId },
+      data: { status, rowsAffected, errorMessage, completedAt: new Date() },
+    });
+
+    if (status === 'FAILED') throw new Error(`Privacy request failed: ${errorMessage}`);
+
+    await this.notifyStaff(req.requestedBy, requestId, req.subjectWalletAddress, rowsAffected);
+
+    return { requestId, rowsAffected };
+  }
+
+  /**
+   * Replace PII fields with redacted placeholders.
+   * - SupportTicket.email → SHA-256 hash
+   * - Claim.description → '[redacted]', imageUrls → []
+   */
   private async anonymize(walletAddress: string): Promise<number> {
-    // Prisma doesn't expose a User model in this schema (TypeORM entity exists separately).
-    // We target the mutable indexed tables that may hold PII.
+    const hashEmail = (email: string) =>
+      createHash('sha256').update(email).digest('hex');
+
+    const tickets = await this.prisma.supportTicket.findMany({
+      where: { email: { not: { startsWith: '[redacted]' } } },
+      select: { id: true, email: true },
+    });
+
+    const ticketUpdates = tickets
+      .filter((t) => t.email === walletAddress || t.email.includes(walletAddress))
+      .map((t) =>
+        this.prisma.supportTicket.update({
+          where: { id: t.id },
+          data: { email: hashEmail(t.email) },
+        }),
+      );
+
     const results = await this.prisma.$transaction([
-      // Nullify description and imageUrls on claims filed by this address
       this.prisma.claim.updateMany({
-        where: { creatorAddress: walletAddress, deletedAt: null },
+        where: { creatorAddress: walletAddress, deletedAt: null, description: { not: null } },
         data: { description: '[redacted]', imageUrls: [] },
       }),
+      ...ticketUpdates,
     ]);
-    return results.reduce((sum, r) => sum + r.count, 0);
+
+    return results.reduce((sum, r) => sum + ('count' in r ? r.count : 1), 0);
   }
 
   /**
    * Hard-delete mutable off-chain rows for the subject.
    * Votes and raw events are retained for audit integrity.
-   * On-chain data is immutable and cannot be deleted.
    */
   private async delete(walletAddress: string): Promise<number> {
     const results = await this.prisma.$transaction([
       this.prisma.claim.deleteMany({
-        where: {
-          creatorAddress: walletAddress,
-          isFinalized: false,
-          deletedAt: null,
-        },
+        where: { creatorAddress: walletAddress, isFinalized: false, deletedAt: null },
       }),
     ]);
     return results.reduce((sum, r) => sum + r.count, 0);
+  }
+
+  private async notifyStaff(
+    staffEmail: string,
+    requestId: string,
+    subject: string,
+    rowsAffected: number,
+  ): Promise<void> {
+    const smtpHost = this.config.get<string>('SMTP_HOST');
+    if (!smtpHost) return;
+
+    try {
+      const transport = nodemailer.createTransport({
+        host: smtpHost,
+        port: this.config.get<number>('SMTP_PORT', 1025),
+        secure: false,
+      });
+      await transport.sendMail({
+        from: this.config.get<string>('SMTP_FROM', 'noreply@niffyinsur.io'),
+        to: staffEmail,
+        subject: `Privacy request ${requestId} completed`,
+        text: `Privacy request ${requestId} for subject ${subject} completed. Rows affected: ${rowsAffected}.`,
+      });
+    } catch (err) {
+      this.logger.warn(`Staff notification failed for request ${requestId}: ${(err as Error).message}`);
+    }
   }
 
   async getRequest(requestId: string) {

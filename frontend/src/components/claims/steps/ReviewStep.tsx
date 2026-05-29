@@ -2,6 +2,7 @@ import { FileText, Image as ImageIcon, Wallet, ShieldCheck } from 'lucide-react'
 
 import { Card, CardContent } from '@/components/ui';
 import { formatTokenAmount } from '@/lib/formatTokenAmount';
+import type { EvidenceAttachment } from './EvidenceStep';
 
 export interface PolicyCoverageDetails {
   coverageAmount: number;
@@ -14,7 +15,7 @@ interface ReviewStepProps {
   data: {
     amount: string;
     details: string;
-    evidence: { url: string; contentSha256Hex: string }[];
+    evidence: EvidenceAttachment[];
   };
   policyId: string;
   policyCoverage?: PolicyCoverageDetails;
@@ -86,7 +87,7 @@ export function ReviewStep({
                   <p className="text-xs font-medium text-muted-foreground">Claim Amount</p>
                   {onEdit && (
                     <button
-                      onClick={() => onEdit(0)}
+                      onClick={() => onEdit(1)}
                       className="text-xs font-medium text-primary hover:underline"
                       aria-label="Edit claim amount"
                     >
@@ -143,7 +144,7 @@ export function ReviewStep({
                   </p>
                   {onEdit && (
                     <button
-                      onClick={() => onEdit(2)}
+                      onClick={() => onEdit(0)}
                       className="text-xs font-medium text-primary hover:underline"
                       aria-label="Edit evidence"
                     >
@@ -159,17 +160,14 @@ export function ReviewStep({
                         className="flex flex-col gap-1 rounded-md border bg-muted/30 p-2 text-xs"
                       >
                         <div className="flex items-center justify-between">
-                          <span
-                            className="font-medium truncate max-w-[200px]"
-                            title={item.url}
-                          >
-                            {item.url.split('/').pop() || 'file'}
+                          <span className="font-mono font-medium truncate max-w-[200px]" title={item.cid}>
+                            {item.cid}
                           </span>
                           <a
                             href={item.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-primary hover:underline"
+                            className="text-primary hover:underline shrink-0 ml-2"
                           >
                             View
                           </a>

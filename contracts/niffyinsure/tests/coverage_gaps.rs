@@ -97,7 +97,7 @@ fn token_is_allowed_after_initialize() {
 #[test]
 fn set_allowed_asset_false_removes_from_allowlist() {
     let (_env, client, _, token) = setup();
-    client.set_allowed_asset(&token, &false);
+    client.set_allowed_asset(&token, &false, &soroban_sdk::String::from_str(&_env, ""), &0u32);
     assert!(!client.is_allowed_asset(&token));
 }
 
@@ -106,7 +106,7 @@ fn set_allowed_asset_true_adds_to_allowlist() {
     let (env, client, _, _) = setup();
     let new_asset = Address::generate(&env);
     assert!(!client.is_allowed_asset(&new_asset));
-    client.set_allowed_asset(&new_asset, &true);
+    client.set_allowed_asset(&new_asset, &true, &soroban_sdk::String::from_str(&env, "NEW"), &7u32);
     assert!(client.is_allowed_asset(&new_asset));
 }
 

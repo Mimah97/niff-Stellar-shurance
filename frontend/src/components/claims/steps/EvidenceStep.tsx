@@ -1,7 +1,7 @@
 'use client';
 
 import { X, Upload, FileText, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 
 import { Button, Progress, Label } from '@/components/ui';
 import {
@@ -14,119 +14,109 @@ interface FileUploadState {
   file: File;
   progress: number;
   status: 'pending' | 'hashing' | 'uploading' | 'completed' | 'error';
+  cid?: string;
   url?: string;
   hash?: string;
   error?: string;
   controller?: AbortController;
 }
 
-export type EvidenceAttachment = { url: string; contentSha256Hex: string };
+export type EvidenceAttachment = { cid: string; url: string; contentSha256Hex: string };
 
 interface EvidenceStepProps {
   evidence: EvidenceAttachment[];
   onChange: (items: EvidenceAttachment[]) => void;
+  minEvidence?: number;
+  maxEvidence?: number;
 }
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
-export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
+export function EvidenceStep({ evidence, onChange, minEvidence = 1, maxEvidence = 5 }: EvidenceStepProps) {
   const [uploads, setUploads] = useState<Record<string, FileUploadState>>({});
+  const uploadsRef = useRef<Record<string, FileUploadState>>({});
+  const evidenceRef = useRef(evidence);
+  evidenceRef.current = evidence;
+
   const [consent, setConsent] = useState(false);
+
+  const completedCount = evidence.length;
+  const belowMin = completedCount < minEvidence;
+  const atMax = completedCount >= maxEvidence;
+
+  const updateUpload = useCallback((id: string, patch: Partial<FileUploadState>) => {
+    setUploads(prev => {
+      const next = { ...prev, [id]: { ...prev[id], ...patch } };
+      uploadsRef.current = next;
+      return next;
+    });
+  }, []);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const newUploads = { ...uploads };
+    e.target.value = '';
 
-    files.forEach((file) => {
-      // Validation
-      if (file.size > MAX_FILE_SIZE) {
-        alert(`File ${file.name} is too large. Max size is 5MB.`);
-        return;
-      }
-      if (!ALLOWED_TYPES.includes(file.type)) {
-        alert(`File ${file.name} has unsupported type. Use JPEG, PNG or WebP.`);
-        return;
-      }
-
-      const id = `${file.name}-${Date.now()}`;
-      newUploads[id] = {
-        file,
-        progress: 0,
-        status: 'pending',
-      };
+    setUploads(prev => {
+      const next = { ...prev };
+      files.forEach((file) => {
+        if (file.size > MAX_FILE_SIZE || !ALLOWED_TYPES.includes(file.type)) return;
+        const id = `${file.name}-${Date.now()}-${Math.random()}`;
+        next[id] = { file, progress: 0, status: 'pending' };
+      });
+      uploadsRef.current = next;
+      return next;
     });
+  }, []);
 
-    setUploads(newUploads);
-  }, [uploads]);
-
-  const startUpload = async (id: string) => {
-    const upload = uploads[id];
-    if (!upload || upload.status === 'uploading') return;
+  const startUpload = useCallback(async (id: string) => {
+    const upload = uploadsRef.current[id];
+    if (!upload || upload.status === 'uploading' || upload.status === 'hashing') return;
 
     const controller = new AbortController();
-    setUploads(prev => ({
-      ...prev,
-      [id]: { ...prev[id], status: 'hashing', progress: 0, controller, error: undefined }
-    }));
+    updateUpload(id, { status: 'hashing', progress: 0, controller, error: undefined });
 
     try {
       const contentSha256Hex = await computeFileSha256Hex(upload.file);
-      setUploads(prev => ({
-        ...prev,
-        [id]: { ...prev[id], hash: contentSha256Hex, status: 'uploading' },
-      }));
+      updateUpload(id, { hash: contentSha256Hex, status: 'uploading' });
 
       const response = await uploadFileWithProgress(
         upload.file,
-        (p: UploadProgress) => {
-          setUploads(prev => ({
-            ...prev,
-            [id]: { ...prev[id], progress: p.percentage }
-          }));
-        },
+        (p: UploadProgress) => updateUpload(id, { progress: p.percentage }),
         controller.signal,
         3,
-        contentSha256Hex
+        contentSha256Hex,
       );
 
+      const cid = response.cid;
       const url = response.gatewayUrls[0] || '';
-      setUploads(prev => ({
-        ...prev,
-        [id]: {
-          ...prev[id],
-          status: 'completed',
-          progress: 100,
-          url,
-          hash: contentSha256Hex,
-        }
-      }));
+      updateUpload(id, { status: 'completed', progress: 100, cid, url });
 
-      const nextEvidence = evidence.filter((entry) => entry.url !== url);
-      onChange([...nextEvidence, { url, contentSha256Hex }]);
+      const current = evidenceRef.current;
+      onChange([...current.filter(e => e.cid !== cid), { cid, url, contentSha256Hex }]);
     } catch (err) {
       if (err instanceof Error && err.message === 'Upload aborted') return;
-      
-      setUploads(prev => ({
-        ...prev,
-        [id]: { ...prev[id], status: 'error', error: err instanceof Error ? err.message : 'Upload failed' }
-      }));
+      updateUpload(id, {
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Upload failed',
+      });
     }
-  };
+  }, [updateUpload, onChange]);
 
-  const cancelUpload = (id: string) => {
-    const upload = uploads[id];
-    if (upload.controller) {
-      upload.controller.abort();
+  const cancelUpload = useCallback((id: string) => {
+    const upload = uploadsRef.current[id];
+    if (!upload) return;
+    upload.controller?.abort();
+    if (upload.cid) {
+      onChange(evidenceRef.current.filter(e => e.cid !== upload.cid));
     }
-    const newUploads = { ...uploads };
-    delete newUploads[id];
-    setUploads(newUploads);
-
-    if (upload.url) {
-      onChange(evidence.filter((e) => e.url !== upload.url));
-    }
-  };
+    setUploads(prev => {
+      const next = { ...prev };
+      delete next[id];
+      uploadsRef.current = next;
+      return next;
+    });
+  }, [onChange]);
 
   return (
     <div className="space-y-6 py-4">
@@ -135,7 +125,12 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
           <Upload className="mx-auto h-10 w-10 text-muted-foreground/50" />
           <h3 className="mt-4 text-lg font-semibold">Evidence Collection</h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            Upload photos or documents as evidence for your claim. Max 5MB per file.
+            Upload photos or documents as evidence. Max 5MB per file.
+            {minEvidence > 0 && (
+              <span className="block mt-1">
+                Required: {minEvidence}–{maxEvidence} files.
+              </span>
+            )}
           </p>
           <div className="mt-6">
             <input
@@ -145,14 +140,35 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
               accept="image/*"
               className="hidden"
               onChange={handleFileSelect}
+              disabled={atMax}
             />
-            <Button asChild variant="outline">
-              <label htmlFor="file-upload" className="cursor-pointer">
+            <Button asChild variant="outline" disabled={atMax}>
+              <label
+                htmlFor="file-upload"
+                className={atMax ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}
+              >
                 Select Files
               </label>
             </Button>
           </div>
         </div>
+
+        {/* Validation messages */}
+        {belowMin && completedCount === 0 && (
+          <p role="alert" className="text-sm text-destructive">
+            At least {minEvidence} file{minEvidence !== 1 ? 's' : ''} required before proceeding.
+          </p>
+        )}
+        {belowMin && completedCount > 0 && (
+          <p role="alert" className="text-sm text-destructive">
+            At least {minEvidence} file{minEvidence !== 1 ? 's' : ''} required. {completedCount} uploaded so far.
+          </p>
+        )}
+        {atMax && (
+          <p className="text-sm text-muted-foreground">
+            Maximum of {maxEvidence} files reached.
+          </p>
+        )}
 
         {/* Upload List */}
         <div className="space-y-3">
@@ -168,21 +184,28 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
                     <Button size="sm" onClick={() => startUpload(id)}>Upload</Button>
                   )}
                   {upload.status === 'error' && (
-                    <Button size="sm" variant="outline" onClick={() => startUpload(id)}>
-                      Retry
-                    </Button>
+                    <>
+                      <span className="text-xs text-destructive">{upload.error}</span>
+                      <Button size="sm" variant="outline" onClick={() => startUpload(id)}>
+                        Retry
+                      </Button>
+                    </>
                   )}
                   {upload.status === 'completed' && (
                     <CheckCircle2 className="h-5 w-5 text-green-500" />
                   )}
-                  {upload.status === 'error' && (
-                    <span className="text-xs text-destructive">{upload.error}</span>
-                  )}
-                  <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => cancelUpload(id)}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8"
+                    onClick={() => cancelUpload(id)}
+                    aria-label={`Remove ${upload.file.name}`}
+                  >
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
+
               {upload.status === 'uploading' && (
                 <div className="space-y-1">
                   <Progress value={upload.progress} className="h-1.5" />
@@ -195,6 +218,32 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
               {upload.status === 'hashing' && (
                 <p className="text-[10px] text-muted-foreground">Computing SHA-256 hash...</p>
               )}
+
+              {/* CID preview — shown immediately after upload completes */}
+              {upload.status === 'completed' && upload.cid && (
+                <div className="rounded-md bg-muted/50 p-2 space-y-1">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                    IPFS CID
+                  </p>
+                  <p
+                    className="text-[11px] font-mono break-all text-foreground"
+                    data-testid="cid-preview"
+                  >
+                    {upload.cid}
+                  </p>
+                  {upload.url && (
+                    <a
+                      href={upload.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-primary hover:underline"
+                    >
+                      View on gateway ↗
+                    </a>
+                  )}
+                </div>
+              )}
+
               {upload.hash && (
                 <div className="text-[10px] text-muted-foreground font-mono break-all">
                   SHA-256: {upload.hash}
@@ -209,10 +258,12 @@ export function EvidenceStep({ evidence, onChange }: EvidenceStepProps) {
         <div className="flex gap-3">
           <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-500" />
           <div className="space-y-2">
-            <h4 className="text-sm font-bold text-yellow-900 dark:text-yellow-200">Legal & Privacy Reminder</h4>
+            <h4 className="text-sm font-bold text-yellow-900 dark:text-yellow-200">
+              Legal &amp; Privacy Reminder
+            </h4>
             <ul className="list-disc pl-4 text-xs text-yellow-800 space-y-1 dark:text-yellow-300">
-              <li>Evidence uploaded via IPFS is **permanently immutable**. It cannot be deleted.</li>
-              <li>Please **redact** any PII (Personally Identifiable Information) that is not relevant to the claim.</li>
+              <li>Evidence uploaded via IPFS is permanently immutable. It cannot be deleted.</li>
+              <li>Please redact any PII not relevant to the claim.</li>
               <li>Ensure you have the right to share these images.</li>
             </ul>
             <div className="flex items-center space-x-2 pt-2">

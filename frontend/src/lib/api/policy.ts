@@ -39,6 +39,26 @@ export class PolicyAPI {
     return this.handleResponse<{ policyId: string; transactionHash: string }>(response)
   }
 
+  static async initiateRenewal(data: {
+    holder: string;
+    policyId: number;
+    walletAddress: string;
+    coverageTier: string;
+  }): Promise<Transaction> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/policies/${encodeURIComponent(data.holder)}/${data.policyId}/renew`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          walletAddress: data.walletAddress,
+          coverageTier: data.coverageTier,
+        }),
+      },
+    )
+    return this.handleResponse<Transaction>(response)
+  }
+
   static async getPolicy(policyId: string): Promise<Policy> {
     const response = await fetch(`${API_BASE_URL}/api/policies/${policyId}`)
     return this.handleResponse<Policy>(response)

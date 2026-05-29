@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Loader2, ArrowLeft, ArrowRight, CheckCircle } from 'lucide-react';
+import { Loader2, ArrowLeft, ArrowRight, CheckCircle, ExternalLink } from 'lucide-react';
 
 import {
   Stepper,
@@ -20,9 +21,8 @@ import { useDraftPersistence } from '@/hooks/use-draft-persistence';
 import { ClaimAPI } from '@/lib/api/claim';
 import { trackClaimFiled } from '@/lib/analytics';
 
-import { AmountStep } from './steps/AmountStep';
-import { EvidenceStep } from './steps/EvidenceStep';
-import { NarrativeStep } from './steps/NarrativeStep';
+import { EvidenceStep, type EvidenceAttachment } from './steps/EvidenceStep';
+import { DetailsStep } from './steps/DetailsStep';
 import { ReviewStep, type PolicyCoverageDetails } from './steps/ReviewStep';
 import { DraftResumeBanner } from './DraftResumeBanner';
 
@@ -33,13 +33,12 @@ interface ClaimWizardProps {
 }
 
 const STEPS = [
-  { id: '1', title: 'Amount', description: 'Enter claim amount' },
-  { id: '2', title: 'Narrative', description: 'Describe the incident' },
-  { id: '3', title: 'Evidence', description: 'Upload proof' },
-  { id: '4', title: 'Review', description: 'Confirm & Sign' },
+  { id: '1', title: 'Evidence', description: 'Upload proof' },
+  { id: '2', title: 'Details', description: 'Amount & narrative' },
+  { id: '3', title: 'Sign & Submit', description: 'Confirm & sign' },
 ];
 
-const CLAIM_DRAFT_SCHEMA_VERSION = 1;
+const CLAIM_DRAFT_SCHEMA_VERSION = 2;
 
 export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWizardProps) {
   const router = useRouter();
@@ -47,67 +46,77 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
   const { address, signTransaction } = useWallet();
   const [activeStep, setActiveStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
+  const submittingRef = useRef(false); // duplicate-submission guard
+  const [claimId, setClaimId] = useState<number | null>(null);
   const [txStatus, setTxStatus] = useState<string>('');
   const [showBanner, setShowBanner] = useState(true);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
 
+  // Contract config for min/max evidence
+  const [minEvidence, setMinEvidence] = useState(1);
+  const [maxEvidence, setMaxEvidence] = useState(5);
+
   const [formData, setFormData] = useState({
     amount: '',
     details: '',
-    evidence: [] as { url: string; contentSha256Hex: string }[],
+    evidence: [] as EvidenceAttachment[],
   });
 
   const { hasDraft, saveDraft, loadDraft, clearDraft } = useDraftPersistence(
     `claim-${policyId}`,
-    CLAIM_DRAFT_SCHEMA_VERSION
+    CLAIM_DRAFT_SCHEMA_VERSION,
   );
 
-  // Sync draft on form changes (excluding files/IPFS handled by hook sanitize)
+  // Fetch contract config on mount
   useEffect(() => {
-    if (activeStep > 0 || formData.amount || formData.details) {
+    ClaimAPI.getConfig()
+      .then((cfg) => {
+        setMinEvidence(cfg.minEvidenceCount);
+        setMaxEvidence(cfg.maxEvidenceCount);
+      })
+      .catch(() => {
+        // Non-fatal: fall back to defaults (1–5)
+      });
+  }, []);
+
+  // Persist draft on form changes
+  useEffect(() => {
+    if (activeStep > 0 || formData.amount || formData.details || formData.evidence.length > 0) {
       saveDraft({ ...formData, _step: activeStep });
     }
   }, [formData, activeStep, saveDraft]);
 
+  // Focus step heading on step change
+  useEffect(() => {
+    stepHeadingRef.current?.focus();
+  }, [activeStep]);
+
   const handleResumeDraft = () => {
     const draft = loadDraft();
     if (draft) {
-      const { _step, ...data } = draft as any;
-      setFormData(prev => ({ ...prev, ...data }));
-      if (typeof _step === 'number') {
-        setActiveStep(_step);
-      }
-      toast({
-        title: 'Draft Restored',
-        description: 'You are continuing where you left off.',
-      });
+      const { _step, ...data } = draft as Record<string, unknown> & { _step?: number };
+      setFormData(prev => ({ ...prev, ...(data as Partial<typeof formData>) }));
+      if (typeof _step === 'number') setActiveStep(_step);
+      toast({ title: 'Draft Restored', description: 'Continuing where you left off.' });
     }
     setShowBanner(false);
   };
 
   const handleDismissBanner = () => {
-    clearDraft(); // Clearing explicitly if they choose to start over?
-    // Actually, maybe not clearing immediately, but just hiding banner?
-    // Requirements say "Resume draft banner when a valid draft is detected".
-    // If they dismiss, we should probably stop showing it but maybe keep draft until new data overwrites?
-    // Let's clear it to be safe and avoid confusion.
     clearDraft();
     setShowBanner(false);
   };
 
-  // Move focus to step heading when step changes
-  useEffect(() => {
-    if (stepHeadingRef.current) {
-      stepHeadingRef.current.focus();
-    }
-  }, [activeStep]);
+  const canAdvanceFromStep = (step: number): boolean => {
+    if (step === 0) return formData.evidence.length >= minEvidence;
+    if (step === 1) return !!formData.amount && !!formData.details;
+    return true;
+  };
 
   const handleNext = () => {
     if (activeStep < STEPS.length - 1) {
       setActiveStep(prev => prev + 1);
-    } else if (activeStep === STEPS.length - 1) {
-      // Signing is only allowed from the review step (last step)
+    } else {
       handleFinalSubmit();
     }
   };
@@ -121,6 +130,7 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
   };
 
   const handleFinalSubmit = async () => {
+    if (submittingRef.current) return; // prevent duplicate submissions
     if (!address) {
       toast({
         title: 'Wallet not connected',
@@ -130,6 +140,7 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
       setTxStatus('Building transaction…');
@@ -138,46 +149,36 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
         policyId: parseInt(policyId),
         amount: formData.amount,
         details: formData.details,
-        evidence: formData.evidence,
+        evidence: formData.evidence.map(({ url, contentSha256Hex }) => ({ url, contentSha256Hex })),
       });
 
       setTxStatus('Waiting for wallet signature…');
       const signedXdr = await signTransaction(unsignedXdr);
 
       setTxStatus('Submitting transaction to network…');
-      await ClaimAPI.submitTransaction(signedXdr);
+      const result = await ClaimAPI.submitTransaction(signedXdr);
 
       setTxStatus('Claim submitted successfully.');
-      setIsSuccess(true);
+      setClaimId(result.claimId);
 
       trackClaimFiled();
-
-      // EXTREMELY IMPORTANT: Clear draft on success (Issue #229)
       clearDraft();
 
       toast({
         title: 'Claim Submitted!',
-        description: 'Your claim has been successfully filed on-chain.',
+        description: `Claim #${result.claimId} has been filed on-chain.`,
       });
-
-      setTimeout(() => {
-        router.push(`/policies`);
-      }, 3000);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'An unexpected error occurred.';
       setTxStatus(`Submission failed: ${msg}`);
-      console.error('Submission failed:', error);
-      toast({
-        title: 'Submission Failed',
-        description: msg,
-        variant: 'destructive',
-      });
+      toast({ title: 'Submission Failed', description: msg, variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
-  if (isSuccess) {
+  if (claimId !== null) {
     return (
       <Card className="mx-auto max-w-2xl text-center py-12">
         <CardContent className="space-y-6">
@@ -190,12 +191,20 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
           <div className="space-y-2">
             <h2 className="text-2xl font-bold">Claim Filed Successfully</h2>
             <p className="text-muted-foreground">
-              Your claim has been broadcast to the network and is awaiting verification by the DAO.
+              Your claim has been broadcast to the network and is awaiting DAO verification.
             </p>
+            <p className="text-sm font-mono font-semibold">Claim ID: #{claimId}</p>
           </div>
-          <Button onClick={() => router.push(`/policies`)}>
-            Back to Policies
-          </Button>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Button asChild>
+              <Link href={`/claims/${claimId}`}>
+                View Claim <ExternalLink className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={() => router.push('/policies')}>
+              Back to Policies
+            </Button>
+          </div>
         </CardContent>
       </Card>
     );
@@ -203,7 +212,6 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
 
   return (
     <Card className="mx-auto max-w-3xl">
-      {/* Live region announces tx progress to screen readers */}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {txStatus}
       </div>
@@ -217,20 +225,25 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
             </CardDescription>
           </div>
           <Stepper
-            steps={STEPS.map((s, i) => ({ ...s, status: i < activeStep ? 'completed' : i === activeStep ? 'active' : 'pending' as const }))}
+            steps={STEPS.map((s, i) => ({
+              ...s,
+              status: (i < activeStep ? 'completed' : i === activeStep ? 'active' : 'pending') as
+                | 'completed'
+                | 'active'
+                | 'pending',
+            }))}
             currentStep={activeStep}
             aria-label="Claim filing steps"
             className="hidden md:flex"
           />
         </div>
       </CardHeader>
+
       <CardContent className="space-y-6">
-        {/* Banner for resuming draft (Requirement: Resume draft banner detected on wizard mount) */}
         {hasDraft && showBanner && (
           <DraftResumeBanner onConfirm={handleResumeDraft} onDismiss={handleDismissBanner} />
         )}
 
-        {/* Visually hidden heading receives focus on step change */}
         <h2
           ref={stepHeadingRef}
           tabIndex={-1}
@@ -239,55 +252,45 @@ export function ClaimWizard({ policyId, maxCoverage, policyCoverage }: ClaimWiza
           Step {activeStep + 1} of {STEPS.length}: {STEPS[activeStep].title}
         </h2>
 
+        {/* Step 0: Evidence */}
         <StepContent title={STEPS[0].title} isActive={activeStep === 0} isCompleted={activeStep > 0}>
-          <AmountStep
+          <EvidenceStep
+            evidence={formData.evidence}
+            onChange={(evidence) => setFormData(prev => ({ ...prev, evidence }))}
+            minEvidence={minEvidence}
+            maxEvidence={maxEvidence}
+          />
+        </StepContent>
+
+        {/* Step 1: Details (amount + narrative) */}
+        <StepContent title={STEPS[1].title} isActive={activeStep === 1} isCompleted={activeStep > 1}>
+          <DetailsStep
             amount={formData.amount}
-            onChange={(val) => setFormData(prev => ({ ...prev, amount: val }))}
+            details={formData.details}
+            onAmountChange={(amount) => setFormData(prev => ({ ...prev, amount }))}
+            onDetailsChange={(details) => setFormData(prev => ({ ...prev, details }))}
             maxCoverage={maxCoverage}
           />
         </StepContent>
 
-        <StepContent title={STEPS[1].title} isActive={activeStep === 1} isCompleted={activeStep > 1}>
-          <NarrativeStep
-            details={formData.details}
-            onChange={(val) => setFormData(prev => ({ ...prev, details: val }))}
-          />
-        </StepContent>
-
+        {/* Step 2: Review + Sign */}
         <StepContent title={STEPS[2].title} isActive={activeStep === 2} isCompleted={activeStep > 2}>
-          <EvidenceStep
-            evidence={formData.evidence}
-            onChange={(evidence) => setFormData(prev => ({ ...prev, evidence }))}
-          />
-        </StepContent>
-
-        <StepContent title={STEPS[3].title} isActive={activeStep === 3} isCompleted={activeStep > 3}>
-          <ReviewStep 
-            data={formData} 
+          <ReviewStep
+            data={formData}
             policyId={policyId}
             policyCoverage={policyCoverage}
-            onEdit={(step) => setActiveStep(step)} 
+            onEdit={(step) => setActiveStep(step)}
           />
         </StepContent>
 
-
         <div className="flex justify-between pt-4 border-t">
-          <Button
-            variant="ghost"
-            onClick={handleBack}
-            disabled={isSubmitting}
-          >
+          <Button variant="ghost" onClick={handleBack} disabled={isSubmitting}>
             <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />
             {activeStep === 0 ? 'Cancel' : 'Back'}
           </Button>
           <Button
             onClick={handleNext}
-            disabled={
-              isSubmitting ||
-              (activeStep === 0 && !formData.amount) ||
-              (activeStep === 1 && !formData.details) ||
-              (activeStep === 3 && isSubmitting)
-            }
+            disabled={isSubmitting || !canAdvanceFromStep(activeStep)}
             aria-busy={isSubmitting}
           >
             {isSubmitting ? (

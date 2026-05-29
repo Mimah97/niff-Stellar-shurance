@@ -19,6 +19,7 @@ const mockAdminService = {
   getBackfillJob: jest.fn(),
   setFeatureFlag: jest.fn(),
   getFeatureFlags: jest.fn(),
+  getReindexStatus: jest.fn(),
 };
 const mockAdminPoliciesService = {
   listPolicies: jest.fn(),
@@ -121,7 +122,39 @@ describe('AdminController', () => {
     });
   });
 
-  // ── POST /admin/indexer/backfill ─────────────────────────────────────────
+  // ── GET /admin/reindex/status ────────────────────────────────────────────
+
+  describe('GET /admin/reindex/status', () => {
+    it('returns progress for the default network', async () => {
+      const mockStatus = {
+        jobId: 'reindex-testnet-500-ts',
+        network: 'testnet',
+        currentLedger: 750,
+        targetLedger: 1000,
+        percentage: 50,
+        status: 'running',
+        startedAt: new Date('2026-01-01'),
+      };
+      mockAdminService.getReindexStatus.mockResolvedValue(mockStatus);
+      const result = await controller.getReindexStatus(undefined);
+      expect(result).toEqual(mockStatus);
+      expect(mockAdminService.getReindexStatus).toHaveBeenCalledWith('testnet');
+    });
+
+    it('uses explicit network query param', async () => {
+      mockAdminService.getReindexStatus.mockResolvedValue({
+        jobId: 'j', network: 'mainnet', currentLedger: 100, targetLedger: 200,
+        percentage: 50, status: 'running', startedAt: new Date(),
+      });
+      await controller.getReindexStatus('mainnet');
+      expect(mockAdminService.getReindexStatus).toHaveBeenCalledWith('mainnet');
+    });
+
+    it('throws NotFoundException when no progress row exists', async () => {
+      mockAdminService.getReindexStatus.mockResolvedValue(null);
+      await expect(controller.getReindexStatus(undefined)).rejects.toThrow('No reindex progress');
+    });
+  });
 
   describe('POST /admin/indexer/backfill', () => {
     it('enqueues batched jobs and writes audit row', async () => {

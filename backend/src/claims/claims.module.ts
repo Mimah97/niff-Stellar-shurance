@@ -5,6 +5,7 @@ import { SanitizationService } from './sanitization.service';
 import { ClaimViewMapper } from './claim-view.mapper';
 import { ClaimAggregationService } from './services/claim-aggregation.service';
 import { EvidenceUploadService } from './services/evidence-upload.service';
+import { EvidenceProxyService } from './services/evidence-proxy.service';
 import { ClaimDeadlineProcessorService } from './claim-deadline.processor.service';
 import { ClaimDeadlineBootstrap } from './claim-deadline.bootstrap';
 import { ClaimHistoryService } from './services/claim-history.service';
@@ -26,6 +27,7 @@ import { AdminModule } from '../admin/admin.module';
     ClaimViewMapper,
     ClaimAggregationService,
     EvidenceUploadService,
+    EvidenceProxyService,
     ClaimDeadlineProcessorService,
     ClaimDeadlineBootstrap,
     ClaimHistoryService,

@@ -11,12 +11,14 @@ describe('ReviewStep', () => {
     details: 'This is a test claim narrative documenting the incident.',
     evidence: [
       {
-        url: 'ipfs://QmYwAPJzv5CZsnA625s3Xf2SmxWeN4A7h...',
+        cid: 'QmYwAPJzv5CZsnA625s3Xf2SmxWeN4A7hh5XBnZASHxxx',
+        url: 'https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2SmxWeN4A7hh5XBnZASHxxx',
         contentSha256Hex:
           'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       },
       {
-        url: 'https://example.com/long-file-name-that-should-be-truncated-in-ui.jpg',
+        cid: 'QmABC123def456',
+        url: 'https://ipfs.io/ipfs/QmABC123def456',
         contentSha256Hex:
           '01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b',
       },
@@ -39,92 +41,68 @@ describe('ReviewStep', () => {
   it('renders all claim data correctly', () => {
     render(<ReviewStep data={mockData} policyId={policyId} />);
 
-    // Check amount (1000 minor units with 7 decimals = 0.0001 XLM)
+    // Amount (1000 minor units with 7 decimals = 0.0001 XLM)
     expect(screen.getByText(/0\.0001/)).toBeInTheDocument();
 
-    // Check policy ID
+    // Policy ID
     expect(screen.getByText('Policy ID: #12345')).toBeInTheDocument();
 
-    // Check narrative
+    // Narrative
     expect(
-      screen.getByText('This is a test claim narrative documenting the incident.')
+      screen.getByText('This is a test claim narrative documenting the incident.'),
     ).toBeInTheDocument();
 
-    // Check evidence count
+    // Evidence count
     expect(screen.getByText('Evidence (2 files)')).toBeInTheDocument();
 
-    // Check evidence items
-    expect(screen.getByText('QmYwAPJzv5CZsnA625s3Xf2SmxWeN4A7h...')).toBeInTheDocument();
+    // CIDs shown
     expect(
-      screen.getByText('long-file-name-that-should-be-truncated-in-ui.jpg')
+      screen.getByText('QmYwAPJzv5CZsnA625s3Xf2SmxWeN4A7hh5XBnZASHxxx'),
     ).toBeInTheDocument();
+    expect(screen.getByText('QmABC123def456')).toBeInTheDocument();
 
-    // Check hashes (first and last parts)
+    // Hashes (truncated)
     expect(screen.getByText('e3b0c44298fc1c14...7852b855')).toBeInTheDocument();
     expect(screen.getByText('01ba4719c80b6fe9...daca546b')).toBeInTheDocument();
   });
 
   it('renders policy coverage details when provided', () => {
     render(
-      <ReviewStep data={mockData} policyId={policyId} policyCoverage={mockPolicyCoverage} />
+      <ReviewStep data={mockData} policyId={policyId} policyCoverage={mockPolicyCoverage} />,
     );
 
-    // Coverage section heading
     expect(screen.getByText('Policy Coverage')).toBeInTheDocument();
-
-    // Coverage amount (50000000 stroops = 5 XLM)
-    expect(screen.getByText(/5\.00/)).toBeInTheDocument();
-
-    // Status (lowercased)
+    expect(screen.getByText(/5\.00/)).toBeInTheDocument(); // 50000000 stroops = 5 XLM
     expect(screen.getByText('active')).toBeInTheDocument();
-
-    // Expiry date rendered
     expect(screen.getByText(/2027/)).toBeInTheDocument();
   });
 
-  it('does not render policy coverage section when policyCoverage is omitted', () => {
+  it('does not render policy coverage section when omitted', () => {
     render(<ReviewStep data={mockData} policyId={policyId} />);
     expect(screen.queryByText('Policy Coverage')).not.toBeInTheDocument();
   });
 
   it('handles empty evidence correctly', () => {
     render(<ReviewStep data={{ ...mockData, evidence: [] }} policyId={policyId} />);
-
     expect(screen.getByText('Evidence (0 files)')).toBeInTheDocument();
     expect(screen.getByText('No evidence uploaded.')).toBeInTheDocument();
   });
 
-  it('triggers onEdit with correct step index when Edit is clicked', () => {
+  it('triggers onEdit(0) for evidence, onEdit(1) for amount and narrative', () => {
     render(<ReviewStep data={mockData} policyId={policyId} onEdit={mockOnEdit} />);
 
-    // Edit Amount
     fireEvent.click(screen.getByRole('button', { name: /edit claim amount/i }));
-    expect(mockOnEdit).toHaveBeenCalledWith(0);
+    expect(mockOnEdit).toHaveBeenCalledWith(1);
 
-    // Edit Narrative
     fireEvent.click(screen.getByRole('button', { name: /edit narrative/i }));
     expect(mockOnEdit).toHaveBeenCalledWith(1);
 
-    // Edit Evidence
     fireEvent.click(screen.getByRole('button', { name: /edit evidence/i }));
-    expect(mockOnEdit).toHaveBeenCalledWith(2);
+    expect(mockOnEdit).toHaveBeenCalledWith(0);
   });
 
   it('does not render Edit buttons when onEdit is not provided', () => {
     render(<ReviewStep data={mockData} policyId={policyId} />);
     expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
-  });
-
-  it('renders all evidence file names and hashes', () => {
-    const evidence = [
-      {
-        url: 'ipfs://QmABC123/photo.jpg',
-        contentSha256Hex: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-      },
-    ];
-    render(<ReviewStep data={{ ...mockData, evidence }} policyId={policyId} />);
-
-    expect(screen.getByText('photo.jpg')).toBeInTheDocument();
-    expect(screen.getByText('abcdef1234567890...34567890')).toBeInTheDocument();
   });
 });
