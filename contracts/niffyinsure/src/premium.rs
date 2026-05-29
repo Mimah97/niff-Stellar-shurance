@@ -18,7 +18,7 @@ use crate::{
     },
     validate::Error,
 };
-use soroban_sdk::{Env, Map, String, Vec};
+use soroban_sdk::{Address, Env, Map, String, Vec};
 
 // Re-export pure types and constants so existing callers don't need to change.
 pub use premium_pure::{
@@ -52,6 +52,19 @@ pub fn default_multiplier_table(env: &Env) -> MultiplierTable {
         safety_discount: 2_000,
         version: 1,
     }
+}
+
+/// Resolve the multiplier table to use for `asset`.
+///
+/// Lookup order:
+/// 1. Asset-specific table stored under `DataKey::AssetPremiumTable(asset)`.
+/// 2. Global default table stored under `DataKey::PremiumTable`.
+///
+/// Returns `Err(Error::MissingRegionMultiplier)` only if neither table is
+/// initialised — which cannot happen after `initialize()` sets the default.
+pub fn get_table_for_asset(env: &Env, asset: &Address) -> MultiplierTable {
+    storage::get_asset_premium_table(env, asset)
+        .unwrap_or_else(|| storage::get_multiplier_table(env))
 }
 
 pub fn update_multiplier_table(env: &Env, new_table: &MultiplierTable) -> Result<(), Error> {
@@ -180,6 +193,68 @@ fn validate_multiplier_table(env: &Env, table: &MultiplierTable) -> Result<(), E
 
     if table.safety_discount < 0 || table.safety_discount > MAX_SAFETY_DISCOUNT {
         return Err(Error::SafetyDiscountOutOfBounds);
+    }
+
+    Ok(())
+}
+
+/// Validate an asset-specific table.
+///
+/// Unlike the global table, asset-specific tables are NOT version-gated against
+/// the global table version — they have their own independent versioning.
+/// The only requirement is that the new version is strictly greater than the
+/// currently stored asset-specific version (or any version is accepted when
+/// no asset-specific table exists yet).
+fn validate_asset_table(
+    env: &Env,
+    asset: &Address,
+    table: &MultiplierTable,
+) -> Result<(), Error> {
+    if let Some(existing) = storage::get_asset_premium_table(env, asset) {
+        if table.version <= existing.version {
+            return Err(Error::InvalidConfigVersion);
+        }
+    }
+
+    crate::validate::check_multiplier_table_shape(table)?;
+    validate_table_rows(&table.region, MultiplierKind::Region)?;
+    validate_table_rows(&table.age, MultiplierKind::Age)?;
+    validate_table_rows(&table.coverage, MultiplierKind::Coverage)?;
+
+    if table.safety_discount < 0 || table.safety_discount > MAX_SAFETY_DISCOUNT {
+        return Err(Error::SafetyDiscountOutOfBounds);
+    }
+
+    Ok(())
+}
+
+/// Admin-only: set an asset-specific multiplier table.
+///
+/// The asset must be allowlisted. The table must pass the same shape and
+/// bounds validation as the global table. Version must be strictly greater
+/// than any previously stored asset-specific table for this asset.
+///
+/// Pass `None` for `table` to remove the asset-specific table and revert
+/// to the global default for that asset.
+pub fn admin_set_asset_premium_table(
+    env: &Env,
+    asset: &Address,
+    table: Option<MultiplierTable>,
+) -> Result<(), Error> {
+    if !storage::is_allowed_asset(env, asset) {
+        return Err(Error::InvalidAsset);
+    }
+
+    match table {
+        None => {
+            storage::remove_asset_premium_table(env, asset);
+            crate::events::emit_asset_premium_table_set(env, asset, 0, true);
+        }
+        Some(ref t) => {
+            validate_asset_table(env, asset, t)?;
+            storage::set_asset_premium_table(env, asset, t);
+            crate::events::emit_asset_premium_table_set(env, asset, t.version, false);
+        }
     }
 
     Ok(())

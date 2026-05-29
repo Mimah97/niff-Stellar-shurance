@@ -1224,6 +1224,37 @@ pub fn set_policy_type_config(
         .set(&DataKey::PolicyTypeConfig(policy_type.clone()), config);
 }
 
+// ── Per-asset premium table (instance) ───────────────────────────────────────
+
+/// Get the asset-specific multiplier table for `asset`.
+/// Returns `None` when no asset-specific table has been set (caller should fall back to default).
+pub fn get_asset_premium_table(
+    env: &Env,
+    asset: &Address,
+) -> Option<crate::types::MultiplierTable> {
+    env.storage()
+        .instance()
+        .get(&DataKey::AssetPremiumTable(asset.clone()))
+}
+
+/// Persist an asset-specific multiplier table.
+pub fn set_asset_premium_table(
+    env: &Env,
+    asset: &Address,
+    table: &crate::types::MultiplierTable,
+) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AssetPremiumTable(asset.clone()), table);
+}
+
+/// Remove an asset-specific multiplier table (reverts to global default).
+pub fn remove_asset_premium_table(env: &Env, asset: &Address) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::AssetPremiumTable(asset.clone()));
+}
+
 // ── Non-experimental stubs (panic guards) ────────────────────────────────────
 
 #[cfg(not(feature = "experimental"))]

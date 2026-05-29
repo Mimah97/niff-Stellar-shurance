@@ -521,3 +521,39 @@ pub fn emit_payout_asset_override_applied(
     }
     .publish(env);
 }
+
+// ── Per-asset premium table event ─────────────────────────────────────────────
+
+/// Emitted by `admin_set_asset_premium_table` when an asset-specific table is set or cleared.
+///
+/// topics: ("niffyinsure", "asset_premium_table_set", asset)
+/// payload: { version, table_version, cleared }
+///
+/// `cleared = 1` means the table was removed (fallback to global default).
+/// `cleared = 0` means a new table was stored; `table_version` is its version field.
+#[contractevent(topics = ["niffyinsure", "asset_premium_table_set"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetPremiumTableSet {
+    #[topic]
+    pub asset: Address,
+    pub version: u32,
+    /// Version field from the stored `MultiplierTable` (0 when cleared).
+    pub table_version: u32,
+    /// 1 = table removed (fallback to default), 0 = table stored.
+    pub cleared: u32,
+}
+
+pub fn emit_asset_premium_table_set(
+    env: &Env,
+    asset: &Address,
+    table_version: u32,
+    cleared: bool,
+) {
+    AssetPremiumTableSet {
+        asset: asset.clone(),
+        version: EVENT_SCHEMA_VERSION,
+        table_version,
+        cleared: if cleared { 1 } else { 0 },
+    }
+    .publish(env);
+}

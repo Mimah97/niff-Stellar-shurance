@@ -76,24 +76,29 @@ pub trait PremiumCalculatorTrait {
 
 /// Compute a premium quote, routing to the external calculator when configured.
 ///
+/// `asset` is used to look up an asset-specific multiplier table when no
+/// external calculator is configured. Pass `None` to use the global default.
+///
 /// Routing logic:
 /// - If `CalcAddress` is set → cross-contract call; errors bubble up as
 ///   `CalculatorCallFailed` (or `CalculatorPaused` for CalcError::Paused = 17).
-/// - If `CalcAddress` is absent → local `premium::compute_premium` fallback.
+/// - If `CalcAddress` is absent → local `premium::compute_premium` fallback,
+///   using the asset-specific table when available.
 pub fn compute_quote(
     env: &Env,
     input: &RiskInput,
     base_amount: i128,
     include_breakdown: bool,
     quote_ttl: u32,
+    asset: Option<&Address>,
 ) -> Result<PremiumQuote, Error> {
     match storage::get_calc_address(env) {
         Some(calc_addr) => match call_external(env, &calc_addr, input, base_amount, quote_ttl) {
             Ok(quote) => Ok(quote),
             Err(Error::CalculatorPaused) => Err(Error::CalculatorPaused),
-            Err(_) => call_local(env, input, base_amount, include_breakdown, quote_ttl),
+            Err(_) => call_local(env, input, base_amount, include_breakdown, quote_ttl, asset),
         },
-        None => call_local(env, input, base_amount, include_breakdown, quote_ttl),
+        None => call_local(env, input, base_amount, include_breakdown, quote_ttl, asset),
     }
 }
 
@@ -151,8 +156,12 @@ fn call_local(
     base_amount: i128,
     include_breakdown: bool,
     quote_ttl: u32,
+    asset: Option<&Address>,
 ) -> Result<PremiumQuote, Error> {
-    let table = storage::get_multiplier_table(env);
+    let table = match asset {
+        Some(a) => premium::get_table_for_asset(env, a),
+        None => storage::get_multiplier_table(env),
+    };
     let computation = premium::compute_premium(input, base_amount, &table)?;
     let line_items = if include_breakdown {
         Some(premium::build_line_items(env, &computation))

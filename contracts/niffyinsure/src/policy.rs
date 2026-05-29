@@ -127,6 +127,7 @@ pub fn generate_premium(
     safety_score: u32,
     base_amount: i128,
     include_breakdown: bool,
+    asset: Option<&Address>,
 ) -> Result<PremiumQuote, validate::Error> {
     let input = RiskInput {
         region,
@@ -140,7 +141,10 @@ pub fn generate_premium(
         return Err(validate::Error::InvalidBaseAmount);
     }
 
-    let table = storage::get_multiplier_table(env);
+    let table = match asset {
+        Some(a) => premium::get_table_for_asset(env, a),
+        None => storage::get_multiplier_table(env),
+    };
     let computation = premium::compute_premium(&input, base_amount, &table)?;
     let line_items = if include_breakdown {
         Some(premium::build_line_items(env, &computation))
@@ -311,8 +315,9 @@ pub fn initiate_policy(
     };
 
     // Compute premium via the calculator (external or local fallback).
+    // Pass the policy asset so asset-specific tables are used when configured.
     let quote =
-        crate::calculator::compute_quote(env, &input, base_amount, false, QUOTE_TTL_LEDGERS)
+        crate::calculator::compute_quote(env, &input, base_amount, false, QUOTE_TTL_LEDGERS, Some(&asset))
             .map_err(|e| match e {
                 validate::Error::CalculatorPaused => PolicyError::ContractPaused,
                 validate::Error::CalculatorCallFailed | validate::Error::CalculatorNotSet => {
@@ -586,7 +591,7 @@ pub fn renew_policy(
     };
 
     let quote =
-        crate::calculator::compute_quote(env, &input, policy.coverage, false, QUOTE_TTL_LEDGERS)
+        crate::calculator::compute_quote(env, &input, policy.coverage, false, QUOTE_TTL_LEDGERS, Some(&policy.asset))
             .map_err(|e| match e {
                 Error::CalculatorPaused => PolicyError::ContractPaused,
                 Error::CalculatorCallFailed | Error::CalculatorNotSet => {

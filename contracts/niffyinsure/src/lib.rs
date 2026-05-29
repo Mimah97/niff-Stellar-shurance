@@ -129,6 +129,28 @@ impl NiffyInsure {
             input.safety_score,
             base_amount,
             include_breakdown,
+            None,
+        )
+    }
+
+    /// Like `generate_premium` but uses the asset-specific multiplier table when configured.
+    /// Falls back to the global default table when no asset-specific table exists.
+    pub fn generate_premium_for_asset(
+        env: Env,
+        input: types::RiskInput,
+        base_amount: i128,
+        include_breakdown: bool,
+        asset: Address,
+    ) -> Result<types::PremiumQuote, validate::Error> {
+        policy::generate_premium(
+            &env,
+            input.region,
+            input.age_band,
+            input.coverage,
+            input.safety_score,
+            base_amount,
+            include_breakdown,
+            Some(&asset),
         )
     }
 
@@ -780,6 +802,36 @@ impl NiffyInsure {
     /// Read the current allowlisted IPFS gateway URL prefixes.
     pub fn get_gateway_allowlist(env: Env) -> Vec<String> {
         storage::get_gateway_allowlist(&env)
+    }
+
+    // ── Per-asset premium table ───────────────────────────────────────────────
+
+    /// Admin-only: set an asset-specific multiplier table.
+    ///
+    /// The asset must be allowlisted. The table must pass the same shape and
+    /// bounds validation as the global table. Version must be strictly greater
+    /// than any previously stored asset-specific table for this asset.
+    ///
+    /// Pass `None` for `table` to remove the asset-specific table and revert
+    /// to the global default for that asset.
+    ///
+    /// Emits `AssetPremiumTableSet`.
+    pub fn admin_set_asset_premium_table(
+        env: Env,
+        asset: Address,
+        table: Option<types::MultiplierTable>,
+    ) -> Result<(), validate::Error> {
+        admin::require_admin(&env);
+        premium::admin_set_asset_premium_table(&env, &asset, table)
+    }
+
+    /// Read the asset-specific multiplier table for `asset`.
+    /// Returns `None` when no asset-specific table has been set (global default applies).
+    pub fn get_asset_premium_table(
+        env: Env,
+        asset: Address,
+    ) -> Option<types::MultiplierTable> {
+        storage::get_asset_premium_table(&env, &asset)
     }
 
     // ═════════════════════════════════════════════════════════════════════════════
