@@ -194,6 +194,15 @@ pub struct PayoutTimedOut {
     pub at_ledger: u32,
 }
 
+/// Emitted when admin disputes an approved claim during the dispute window.
+#[contractevent(topics = ["niffyinsure", "claim_disputed"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimDisputed {
+    #[topic]
+    pub claim_id: u64,
+    pub at_ledger: u32,
+}
+
 /// Emitted every time a rejection increments the policy's strike counter.
 /// Indexers should use this event to notify holders of accumulating strikes
 /// before the threshold triggers deactivation.
@@ -333,6 +342,7 @@ pub fn file_claim(
         appeal_approve_votes: 0,
         appeal_reject_votes: 0,
         status_history,
+        dispute_deadline_ledger: 0,
     };
 
     storage::set_claim(env, &claim);
@@ -566,6 +576,8 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
     if claim.status != status_before {
         if claim.status == ClaimStatus::Approved && claim.payout_deadline_ledger == 0 {
             claim.payout_deadline_ledger = now.saturating_add(ledger::PAYOUT_TIMEOUT_LEDGERS);
+            // Set dispute deadline after approval
+            claim.dispute_deadline_ledger = now.saturating_add(ledger::DEFAULT_DISPUTE_WINDOW_LEDGERS);
         }
         push_status_transition(&mut claim.status_history, claim.status.clone(), now);
     }
@@ -666,8 +678,13 @@ pub fn process_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
         return Err(Error::ClaimNotApproved);
     }
 
-    payout(env, &claim)?;
+    // Check dispute deadline: payout cannot execute until dispute window closes
     let now = env.ledger().sequence();
+    if now <= claim.dispute_deadline_ledger {
+        return Err(Error::DisputeWindowActive);
+    }
+
+    payout(env, &claim)?;
     crate::rolling_claim_cap::record_claim_paid(
         env,
         &claim.claimant,
@@ -841,6 +858,34 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         gross_amount: gross,
         deductible,
         amount: net,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Admin-only: dispute an approved claim within the dispute window.
+/// Freezes payout and sets status to Disputed for review.
+pub fn dispute_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
+    let mut claim = storage::get_claim(env, claim_id).ok_or(Error::ClaimNotFound)?;
+
+    if claim.status != ClaimStatus::Approved {
+        return Err(Error::ClaimNotApproved);
+    }
+
+    let now = env.ledger().sequence();
+    if now > claim.dispute_deadline_ledger {
+        return Err(Error::PayoutDeadlineNotReached);
+    }
+
+    let old_status = claim.status.clone();
+    claim.status = ClaimStatus::Disputed;
+    push_status_transition(&mut claim.status_history, ClaimStatus::Disputed, now);
+    storage::set_claim(env, &claim);
+
+    ClaimDisputed {
+        claim_id,
+        at_ledger: now,
     }
     .publish(env);
 

@@ -71,6 +71,8 @@ pub enum Error {
     RollingClaimCapExceeded = 54,
     /// Keeper `process_payout_timeout` called before the approved payout deadline elapsed.
     PayoutDeadlineNotReached = 55,
+    /// Admin dispute window is still active; payout cannot execute yet.
+    DisputeWindowActive = 56,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
