@@ -270,7 +270,7 @@ Emitted when a holder sets or changes their designated payout beneficiary.
 | Event | Topics | Key payload fields |
 |-------|--------|--------------------|
 | `tbl_upd` | `(NS, "tbl_upd")` | `table_version: u32` |
-| `asset_set` | `(NS, "asset_set", asset)` | `allowed: 0\|1` |
+| `asset_set` | `(NS, "asset_set", asset)` | `allowed: 0\|1`, `symbol_hint: string`, `decimals: u32` |
 | `adm_prop` | `(NS, "adm_prop", old_admin, new_admin)` | `version` only |
 | `adm_acc` | `(NS, "adm_acc", old_admin, new_admin)` | `version` only |
 | `adm_can` | `(NS, "adm_can", admin, cancelled_pending)` | `version` only |

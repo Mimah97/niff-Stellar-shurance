@@ -148,10 +148,10 @@ fn admin_can_add_and_remove_asset_from_allowlist() {
 
     assert!(!t.client.is_allowed_asset(&token_b));
 
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
     assert!(t.client.is_allowed_asset(&token_b));
 
-    t.client.set_allowed_asset(&token_b, &false);
+    t.client.set_allowed_asset(&token_b, &false, &soroban_sdk::String::from_str(&t.env, ""), &0u32);
     assert!(!t.client.is_allowed_asset(&token_b));
 }
 
@@ -160,13 +160,13 @@ fn set_allowed_asset_emits_event() {
     let t = setup();
     let (token_b, _) = make_second_asset(&t);
 
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
     assert!(
         t.client.is_allowed_asset(&token_b),
         "expected asset to be allowlisted after add"
     );
 
-    t.client.set_allowed_asset(&token_b, &false);
+    t.client.set_allowed_asset(&token_b, &false, &soroban_sdk::String::from_str(&t.env, ""), &0u32);
     assert!(
         !t.client.is_allowed_asset(&token_b),
         "expected asset to be removed from allowlist"
@@ -204,7 +204,7 @@ fn two_policies_with_different_assets_are_independent() {
     let (token_b, token_b_admin) = make_second_asset(&t);
 
     // Allowlist token_b.
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
 
     let holder_a = Address::generate(&t.env);
     let holder_b = Address::generate(&t.env);
@@ -299,7 +299,7 @@ fn claim_with_disallowed_bound_asset_is_rejected() {
 
     let t = setup();
     let (token_b, token_b_admin) = make_second_asset(&t);
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
 
     let holder = Address::generate(&t.env);
     fund_and_approve(
@@ -316,7 +316,7 @@ fn claim_with_disallowed_bound_asset_is_rejected() {
     let policy = initiate(&t, &holder, &t.token_a);
 
     // Another asset may remain allowlisted, but the bound asset must stay valid.
-    t.client.set_allowed_asset(&t.token_a, &false);
+    t.client.set_allowed_asset(&t.token_a, &false, &soroban_sdk::String::from_str(&t.env, ""), &0u32);
 
     // Payout should fail because the policy's bound asset is no longer allowlisted.
     let claim = Claim {
@@ -356,7 +356,7 @@ fn removing_asset_from_allowlist_blocks_new_policies() {
     let t = setup();
     let (token_b, token_b_admin) = make_second_asset(&t);
 
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
 
     let holder = Address::generate(&t.env);
     fund_and_approve(
@@ -373,7 +373,7 @@ fn removing_asset_from_allowlist_blocks_new_policies() {
     assert_eq!(policy.asset, token_b);
 
     // Remove from allowlist.
-    t.client.set_allowed_asset(&token_b, &false);
+    t.client.set_allowed_asset(&token_b, &false, &soroban_sdk::String::from_str(&t.env, ""), &0u32);
 
     let holder2 = Address::generate(&t.env);
     fund_and_approve(
@@ -417,7 +417,7 @@ fn removing_asset_from_allowlist_blocks_new_policies() {
 fn legacy_default_asset_policy_coexists_with_multi_asset_policy() {
     let t = setup();
     let (token_b, token_b_admin) = make_second_asset(&t);
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
 
     let legacy_holder = Address::generate(&t.env);
     let new_holder = Address::generate(&t.env);
@@ -466,7 +466,7 @@ fn premium_and_payout_use_same_bound_asset() {
 
     let t = setup();
     let (token_b, token_b_admin) = make_second_asset(&t);
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
 
     let holder = Address::generate(&t.env);
     fund_and_approve(
@@ -531,7 +531,7 @@ fn two_asset_policies_payout_independently() {
 
     let t = setup();
     let (token_b, token_b_admin) = make_second_asset(&t);
-    t.client.set_allowed_asset(&token_b, &true);
+    t.client.set_allowed_asset(&token_b, &true, &soroban_sdk::String::from_str(&t.env, "TKNB"), &7u32);
 
     let holder_a = Address::generate(&t.env);
     let holder_b = Address::generate(&t.env);

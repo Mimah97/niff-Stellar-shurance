@@ -115,7 +115,7 @@
 //! See those modules for field-level documentation.
 
 use crate::types::{ClaimStatus, VoteOption};
-use soroban_sdk::{contractevent, Address, BytesN, Env, Vec};
+use soroban_sdk::{contractevent, Address, BytesN, Env, String, Vec};
 
 /// Bump this when any event payload has a breaking change (semver-major release).
 pub const EVENT_SCHEMA_VERSION: u32 = 1;
@@ -317,7 +317,7 @@ pub fn emit_premium_table_updated(env: &Env, table_version: u32) {
     .publish(env);
 }
 
-/// Emitted by `set_allowed_asset`.
+/// Emitted by `set_allowed_asset` on every call (idempotent — emitted even if state unchanged).
 /// topics: (NS, "asset_set", asset)
 /// payload: AssetAllowlistedData
 #[contractevent(topics = ["niffyins", "asset_set"])]
@@ -328,13 +328,25 @@ pub struct AssetAllowlistedData {
     pub version: u32,
     /// 1 = added to allowlist, 0 = removed.
     pub allowed: u32,
+    /// Human-readable ticker hint (e.g. "USDC"). Empty string on removal.
+    pub symbol_hint: String,
+    /// Token decimal places (e.g. 7 for XLM). 0 on removal.
+    pub decimals: u32,
 }
 
-pub fn emit_asset_allowlisted(env: &Env, asset: &Address, allowed: bool) {
+pub fn emit_asset_allowlisted(
+    env: &Env,
+    asset: &Address,
+    allowed: bool,
+    symbol_hint: String,
+    decimals: u32,
+) {
     AssetAllowlistedData {
         asset: asset.clone(),
         version: EVENT_SCHEMA_VERSION,
         allowed: if allowed { 1 } else { 0 },
+        symbol_hint,
+        decimals,
     }
     .publish(env);
 }

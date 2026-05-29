@@ -208,6 +208,7 @@ fn auth01_non_admin_cannot_set_quorum_bps() {
 fn auth05_non_admin_cannot_set_allowed_asset() {
     let (env, client, _, _, rando) = make_non_admin_env();
     let asset = Address::generate(&env);
+    let sym = soroban_sdk::String::from_str(&env, "TST");
     env_with_single_auth(
         &env,
         &client.address,
@@ -216,10 +217,12 @@ fn auth05_non_admin_cannot_set_allowed_asset() {
         soroban_sdk::vec![
             &env,
             soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&asset, &env),
-            soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&true, &env)
+            soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&true, &env),
+            soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&sym, &env),
+            soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&7u32, &env)
         ],
     );
-    assert!(client.try_set_allowed_asset(&asset, &true).is_err());
+    assert!(client.try_set_allowed_asset(&asset, &true, &sym, &7u32).is_err());
 }
 
 // ── AUTH-02: rotation hijack prevention ───────────────────────────────────────

@@ -213,11 +213,33 @@ impl NiffyInsure {
     }
 
     /// Admin-only: add or remove an asset from the allowlist.
-    pub fn set_allowed_asset(env: Env, asset: Address, allowed: bool) {
+    /// Always emits `asset_set` (idempotent — even if the state is unchanged).
+    pub fn set_allowed_asset(
+        env: Env,
+        asset: Address,
+        allowed: bool,
+        symbol_hint: soroban_sdk::String,
+        decimals: u32,
+    ) {
         let _admin = admin::require_admin(&env);
         storage::bump_instance(&env);
         claim::set_allowed_asset(&env, &asset, allowed);
-        AllowedAssetUpdated { asset, allowed }.publish(&env);
+        AllowedAssetUpdated {
+            asset: asset.clone(),
+            allowed,
+        }
+        .publish(&env);
+        events::emit_asset_allowlisted(
+            &env,
+            &asset,
+            allowed,
+            if allowed {
+                symbol_hint
+            } else {
+                soroban_sdk::String::from_str(&env, "")
+            },
+            if allowed { decimals } else { 0 },
+        );
     }
 
     pub fn is_allowed_asset(env: Env, asset: Address) -> bool {

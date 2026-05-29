@@ -138,7 +138,7 @@ fn sweep_succeeds_after_allowlisting_asset() {
     let recipient = Address::generate(&env);
 
     // Allowlist token2
-    client.set_allowed_asset(&token2, &true);
+    client.set_allowed_asset(&token2, &true, &soroban_sdk::String::from_str(&env, "TKN2"), &7u32);
 
     mint(&env, &token2, &contract_id, 1_000_000);
 
