@@ -272,6 +272,33 @@ pub enum TerminationReason {
     ExcessiveRejections,
 }
 
+/// Reason for pausing the protocol.
+///
+/// Stored alongside the pause state so incident responders can understand
+/// the halt from on-chain data alone without relying on off-chain communication.
+///
+/// # Variants
+/// - `SecurityIncident`: Active exploit or vulnerability being mitigated.
+/// - `UpgradePending`: Planned upgrade requiring a maintenance window.
+/// - `SolvencyRisk`: Treasury or reserve concerns requiring investigation.
+/// - `Regulatory`: Regulatory directive or compliance hold.
+///
+/// # TTL constants rationale
+/// Pause state is stored in instance storage (always live while the contract
+/// is deployed). No separate TTL management is needed for pause state itself.
+///
+/// # Unpause behaviour
+/// When `unpause` is called, the stored `PauseReason` is cleared (set to `None`).
+/// Callers can verify the reason is cleared via `get_pause_reason()`.
+#[contracttype]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PauseReason {
+    SecurityIncident,
+    UpgradePending,
+    SolvencyRisk,
+    Regulatory,
+}
+
 // ── Pagination ────────────────────────────────────────────────────────────────
 
 /// Hard cap on items returned per paginated call.

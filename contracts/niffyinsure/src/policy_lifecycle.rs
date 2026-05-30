@@ -1,8 +1,8 @@
 //! Policy bind/terminate: auth, voter registry, termination metadata, events.
 
 use crate::{
-    storage,
-    types::{Policy, PolicyType, RegionTier, TerminationReason},
+    storage, token,
+    types::{ClaimStatus, Policy, PolicyType, RegionTier, TerminationReason},
     validate,
 };
 use soroban_sdk::{contracterror, contractevent, Address, Env};
@@ -23,6 +23,10 @@ pub enum PolicyError {
     HolderMismatch = 10,
     /// Permissionless `process_expired`: ledger is before `end_ledger + grace_period_ledgers`.
     PolicyLapseNotReached = 11,
+    /// Termination blocked: a claim is currently in Processing status.
+    OpenClaimInProcessing = 12,
+    /// Refund transfer failed (treasury insufficient or token error).
+    RefundTransferFailed = 13,
 }
 
 #[allow(dead_code)]
@@ -88,6 +92,13 @@ pub fn initiate_policy(
 }
 
 /// Holder-initiated termination. Blocks while `OpenClaimCount(holder, policy_id) > 0`.
+/// Calculates a pro-rata refund of unused premium and transfers it from treasury to holder.
+///
+/// Refund formula: `premium * remaining_ledgers / total_ledgers`
+/// where `remaining_ledgers = max(0, end_ledger - now)` and
+/// `total_ledgers = end_ledger - start_ledger`.
+///
+/// Termination is blocked if any claim on this policy is in `Processing` status.
 pub fn terminate_policy(
     env: &Env,
     holder: Address,
@@ -133,8 +144,6 @@ pub fn admin_terminate_policy(
 
     terminate_inner(env, &holder, policy_id, reason, true, allow_open_claims)
 }
-
-/// Permissionless keeper: mark a policy inactive after the renewal + grace window has ended.
 ///
 /// Policies are keyed by `(holder, policy_id)`; `holder` is a **lookup key only** (no auth).
 /// Eligible when `now >= end_ledger + grace_period_ledgers`, the policy is still active, and
@@ -207,7 +216,20 @@ fn terminate_inner(
         return Err(PolicyError::OpenClaimsMustFinalize);
     }
 
+    // Block termination if any claim on this policy is in Processing status.
+    // This prevents holders from terminating to avoid a pending claim decision.
+    if !by_admin || !allow_open_claim_bypass {
+        if has_processing_claim(env, holder, policy_id) {
+            return Err(PolicyError::OpenClaimInProcessing);
+        }
+    }
+
     let now = env.ledger().sequence();
+
+    // Calculate pro-rata refund for unused premium.
+    // refund = premium * remaining_ledgers / total_ledgers
+    let refund_amount = compute_prorata_refund(&policy, now);
+
     policy.is_active = false;
     policy.terminated_at_ledger = now;
     policy.termination_reason = reason.clone();
@@ -219,6 +241,13 @@ fn terminate_inner(
         storage::voters_remove_holder(env, holder);
     }
 
+    // Transfer refund from treasury to holder (only for holder-initiated termination).
+    // Admin terminations do not trigger automatic refunds.
+    if !by_admin && refund_amount > 0 {
+        let treasury = storage::get_treasury(env);
+        token::transfer(env, &policy.asset, &treasury, holder, refund_amount);
+    }
+
     emit_policy_terminated(
         env,
         holder,
@@ -227,9 +256,54 @@ fn terminate_inner(
         by_admin,
         allow_open_claim_bypass && open > 0,
         open,
+        if !by_admin { refund_amount } else { 0 },
     );
 
     Ok(())
+}
+
+/// Returns true if any claim on `(holder, policy_id)` is currently in `Processing` status.
+fn has_processing_claim(env: &Env, holder: &Address, policy_id: u32) -> bool {
+    let claim_counter = storage::get_claim_counter(env);
+    for claim_id in 1..=claim_counter {
+        if let Some(claim) = storage::get_claim(env, claim_id) {
+            if claim.policy_id == policy_id
+                && claim.claimant == *holder
+                && claim.status == ClaimStatus::Processing
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Compute the pro-rata refund amount for unused premium.
+///
+/// Formula: `premium * remaining_ledgers / total_ledgers`
+///
+/// - `remaining_ledgers = max(0, end_ledger - now)` (saturating)
+/// - `total_ledgers = end_ledger - start_ledger`
+///
+/// Returns 0 if the policy is already expired, total_ledgers is 0, or arithmetic overflows.
+fn compute_prorata_refund(policy: &Policy, now: u32) -> i128 {
+    let total_ledgers = policy.end_ledger.saturating_sub(policy.start_ledger);
+    if total_ledgers == 0 {
+        return 0;
+    }
+    let remaining_ledgers = policy.end_ledger.saturating_sub(now);
+    if remaining_ledgers == 0 {
+        return 0;
+    }
+    // Use i128 arithmetic to avoid overflow: premium * remaining / total
+    let numerator = policy
+        .premium
+        .checked_mul(remaining_ledgers as i128)
+        .unwrap_or(0);
+    if numerator <= 0 {
+        return 0;
+    }
+    numerator / (total_ledgers as i128)
 }
 
 #[contractevent(topics = ["niffyinsure", "policy_terminated"])]
@@ -244,6 +318,8 @@ pub struct PolicyTerminated {
     pub open_claim_bypass: u32,
     pub open_claims: u32,
     pub at_ledger: u32,
+    /// Pro-rata refund transferred to holder (0 for admin terminations or expired policies).
+    pub refund_amount: i128,
 }
 
 fn emit_policy_terminated(
@@ -254,6 +330,7 @@ fn emit_policy_terminated(
     terminated_by_admin: bool,
     open_claim_bypass: bool,
     open_claims: u32,
+    refund_amount: i128,
 ) {
     let reason_code = termination_reason_tag(reason);
     let bypass_flag: u32 = if open_claim_bypass { 1 } else { 0 };
@@ -266,6 +343,7 @@ fn emit_policy_terminated(
         open_claim_bypass: bypass_flag,
         open_claims,
         at_ledger: env.ledger().sequence(),
+        refund_amount,
     }
     .publish(env);
 }

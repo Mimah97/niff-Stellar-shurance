@@ -159,6 +159,8 @@ pub enum DataKey {
     CommitRevealPhases(u64),
     /// Voter's 32-byte commitment hash: SHA-256(vote_byte || salt).
     VoteCommitment(u64, Address),
+    /// Reason for the current pause (None when unpaused).
+    PauseReason,
 }
 pub fn has_open_claim(env: &Env, holder: &Address, policy_id: u32) -> bool {
     env.storage()
@@ -466,6 +468,19 @@ pub fn set_paused(env: &Env, paused: bool) {
 /// Set granular pause flags.
 pub fn set_pause_flags(env: &Env, flags: &PauseFlags) {
     env.storage().instance().set(&DataKey::Paused, flags);
+}
+
+/// Set the pause reason. Pass `None` to clear (on unpause).
+pub fn set_pause_reason(env: &Env, reason: Option<crate::types::PauseReason>) {
+    match reason {
+        Some(r) => env.storage().instance().set(&DataKey::PauseReason, &r),
+        None => env.storage().instance().remove(&DataKey::PauseReason),
+    }
+}
+
+/// Get the current pause reason. Returns `None` when unpaused or reason not set.
+pub fn get_pause_reason(env: &Env) -> Option<crate::types::PauseReason> {
+    env.storage().instance().get(&DataKey::PauseReason)
 }
 
 // ── Claim counter (instance) ──────────────────────────────────────────────────

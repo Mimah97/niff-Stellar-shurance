@@ -66,9 +66,27 @@ struct PauseToggled {
     #[topic]
     pub admin: Address,
     pub paused: bool,
+    /// Numeric reason code derived from `PauseReason` (0=SecurityIncident, 1=UpgradePending,
+    /// 2=SolvencyRisk, 3=Regulatory). On unpause this field is 0 (reason cleared).
     pub reason_code: u32,
     pub bind_paused: bool,
     pub claims_paused: bool,
+}
+
+/// Convert a `PauseReason` variant to its numeric code for event emission.
+///
+/// Codes:
+/// - 0 = SecurityIncident
+/// - 1 = UpgradePending
+/// - 2 = SolvencyRisk
+/// - 3 = Regulatory
+fn pause_reason_to_code(reason: &types::PauseReason) -> u32 {
+    match reason {
+        types::PauseReason::SecurityIncident => 0,
+        types::PauseReason::UpgradePending => 1,
+        types::PauseReason::SolvencyRisk => 2,
+        types::PauseReason::Regulatory => 3,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -489,7 +507,27 @@ impl NiffyInsure {
         storage::get_calc_address(&env)
     }
 
-    // ── Policy domain ────────────────────────────────────────────────────
+    /// Admin: atomically update the calculator contract address and expected version.
+    ///
+    /// Both the contract ID and expected version are written in the same transaction,
+    /// ensuring they are always consistent. Pass `expected_version = 0` to disable
+    /// version checking (not recommended for production).
+    ///
+    /// On every subsequent cross-contract call, the calculator's `get_version()` is
+    /// asserted to equal `expected_version` before `compute` is invoked. A mismatch
+    /// reverts with `CalculatorVersionMismatch` (error code 56).
+    pub fn set_calculator_with_version(env: Env, calculator: Address, expected_version: u32) {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_instance(&env);
+        calculator::set_calculator_with_version(&env, &calculator, expected_version);
+    }
+
+    /// Read the expected calculator version (0 = version check disabled).
+    pub fn get_expected_calc_version(env: Env) -> u32 {
+        calculator::get_expected_calc_version(&env).unwrap_or(0)
+    }
+
 
     /// Turn an accepted quote into an enforceable on-chain policy.
     ///
@@ -845,16 +883,19 @@ impl NiffyInsure {
     // Read-only methods continue to work for transparency.
     // ═════════════════════════════════════════════════════════════════════════════
 
-    /// Pause the contract with optional reason code.
-    /// Reason codes: 0=maintenance, 1=vulnerability, 2=key_compromise, 3=other
-    /// Emits PauseToggled event with admin, paused=true, and reason code.
-    pub fn pause(env: Env, admin: Address, reason_code: u32) {
+    /// Pause the contract with a structured reason.
+    ///
+    /// `reason` is stored on-chain so incident responders can read it via simulation
+    /// without authentication. Emits `PauseToggled` with the reason code.
+    pub fn pause(env: Env, admin: Address, reason: types::PauseReason) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can pause");
         storage::set_paused(&env, true);
+        storage::set_pause_reason(&env, Some(reason.clone()));
 
         let flags = storage::get_pause_flags(&env);
+        let reason_code = pause_reason_to_code(&reason);
         PauseToggled {
             admin,
             paused: true,
@@ -865,20 +906,21 @@ impl NiffyInsure {
         .publish(&env);
     }
 
-    /// Unpause the contract with optional reason code.
-    /// Reason codes: 0=resolved, 1=manual, 2=other
-    /// Emits PauseToggled event with admin, paused=false, and reason code.
-    pub fn unpause(env: Env, admin: Address, reason_code: u32) {
+    /// Unpause the contract. Clears the stored pause reason.
+    /// Emits `PauseToggled` with `paused=false` and `reason_code=0`.
+    pub fn unpause(env: Env, admin: Address) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can unpause");
         storage::set_paused(&env, false);
+        // Clear the pause reason on unpause.
+        storage::set_pause_reason(&env, None);
 
         let flags = storage::get_pause_flags(&env);
         PauseToggled {
             admin,
             paused: false,
-            reason_code,
+            reason_code: 0,
             bind_paused: flags.bind_paused,
             claims_paused: flags.claims_paused,
         }
@@ -886,7 +928,7 @@ impl NiffyInsure {
     }
 
     /// Granular pause: pause only policy binding (initiate/renew).
-    pub fn pause_bind(env: Env, admin: Address, reason_code: u32) {
+    pub fn pause_bind(env: Env, admin: Address, reason: types::PauseReason) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can pause");
@@ -894,7 +936,9 @@ impl NiffyInsure {
         let mut flags = storage::get_pause_flags(&env);
         flags.bind_paused = true;
         storage::set_pause_flags(&env, &flags);
+        storage::set_pause_reason(&env, Some(reason.clone()));
 
+        let reason_code = pause_reason_to_code(&reason);
         PauseToggled {
             admin,
             paused: true,
@@ -906,7 +950,7 @@ impl NiffyInsure {
     }
 
     /// Granular pause: pause only claims (file/vote/finalize).
-    pub fn pause_claims(env: Env, admin: Address, reason_code: u32) {
+    pub fn pause_claims(env: Env, admin: Address, reason: types::PauseReason) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can pause");
@@ -914,7 +958,9 @@ impl NiffyInsure {
         let mut flags = storage::get_pause_flags(&env);
         flags.claims_paused = true;
         storage::set_pause_flags(&env, &flags);
+        storage::set_pause_reason(&env, Some(reason.clone()));
 
+        let reason_code = pause_reason_to_code(&reason);
         PauseToggled {
             admin,
             paused: true,
@@ -933,6 +979,13 @@ impl NiffyInsure {
     /// Get detailed pause flags (bind_paused, claims_paused).
     pub fn get_pause_flags(env: Env) -> storage::PauseFlags {
         storage::get_pause_flags(&env)
+    }
+
+    /// Read-only: get the current pause reason.
+    /// Returns `None` when the contract is unpaused or no reason was stored.
+    /// Safe to call via simulation without authentication.
+    pub fn get_pause_reason(env: Env) -> Option<types::PauseReason> {
+        storage::get_pause_reason(&env)
     }
 
     // ── Rolling claim cap (ledger-window cumulative paid per policy) ─────────

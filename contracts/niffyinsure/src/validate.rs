@@ -71,6 +71,9 @@ pub enum Error {
     RollingClaimCapExceeded = 54,
     /// Keeper `process_payout_timeout` called before the approved payout deadline elapsed.
     PayoutDeadlineNotReached = 55,
+    /// Calculator version mismatch: the deployed calculator's `get_version()` does not match
+    /// the expected version stored in the main contract. Update via `set_calculator_with_version`.
+    CalculatorVersionMismatch = 56,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
