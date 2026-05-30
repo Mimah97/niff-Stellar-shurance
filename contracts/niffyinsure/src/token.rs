@@ -18,6 +18,26 @@ pub fn collect_premium(env: &Env, from: &Address, asset: &Address, amount: i128)
     client.transfer_from(&env.current_contract_address(), from, &treasury, &amount);
 }
 
+/// Collect a premium and split it between treasury and protocol fee recipient.
+pub fn collect_premium_with_fee(
+    env: &Env,
+    from: &Address,
+    asset: &Address,
+    treasury_amount: i128,
+    fee_recipient: &Address,
+    fee_amount: i128,
+) {
+    let client = token::TokenClient::new(env, asset);
+    let spender = &env.current_contract_address();
+    let treasury = storage::get_treasury(env);
+    if treasury_amount > 0 {
+        client.transfer_from(spender, from, &treasury, &treasury_amount);
+    }
+    if fee_amount > 0 {
+        client.transfer_from(spender, from, fee_recipient, &fee_amount);
+    }
+}
+
 /// Transfer `amount` of the contract's default treasury token from this contract to `to`.
 /// Used for admin drain operations.
 pub fn transfer_from_contract(env: &Env, to: &Address, amount: i128) {

@@ -86,6 +86,17 @@ pub struct PolicyInitiated {
     pub end_ledger: u32,
 }
 
+/// Emitted when a protocol fee is collected from a premium payment.
+#[contractevent(topics = ["niffyinsure", "protocol_fee_collected"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolFeeCollected {
+    #[topic]
+    pub policy_id: u32,
+    pub version: u32,
+    pub fee_amount: i128,
+    pub recipient: Address,
+}
+
 /// Emitted when the payout beneficiary is set or changed (including at policy initiation when non-empty).
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,6 +263,9 @@ pub fn map_quote_error(env: &Env, err: Error) -> QuoteFailure {
         },
         Error::VoteDelegated => "direct vote rejected because the caller has an active delegation",
         Error::CircularDelegation => "delegation would create a cycle",
+        Error::ProtocolFeeOutOfBounds => {
+            "protocol fee basis points exceed the configured maximum"
+        },
     };
     QuoteFailure {
         code: err as u32,
@@ -332,6 +346,20 @@ pub fn initiate_policy(
         return Err(PolicyError::InvalidPremium);
     }
 
+    let fee_bps = storage::get_protocol_fee_bps(env);
+    let fee_recipient = storage::get_fee_recipient(env);
+    let fee_amount = if fee_bps == 0 {
+        0
+    } else {
+        premium_amount
+            .checked_mul(fee_bps as i128)
+            .ok_or(PolicyError::PremiumOverflow)?
+            / 10_000
+    };
+    let treasury_amount = premium_amount
+        .checked_sub(fee_amount)
+        .ok_or(PolicyError::PremiumOverflow)?;
+
     // Allocate unique per-holder policy_id.
     let policy_id = storage::next_policy_id(env, &holder);
 
@@ -339,9 +367,16 @@ pub fn initiate_policy(
         return Err(PolicyError::DuplicatePolicyId);
     }
 
-    // Premium transfer: holder -> treasury using the policy's bound asset.
+    // Premium transfer: holder -> treasury and fee recipient using the policy's bound asset.
     // Done BEFORE any durable writes so failure leaves no partial state.
-    token::collect_premium(env, &holder, &asset, premium_amount);
+    token::collect_premium_with_fee(
+        env,
+        &holder,
+        &asset,
+        treasury_amount,
+        &fee_recipient,
+        fee_amount,
+    );
 
     let current_ledger = env.ledger().sequence();
     let end_ledger = current_ledger
@@ -371,6 +406,16 @@ pub fn initiate_policy(
 
     storage::set_policy(env, &holder, policy_id, &policy);
     storage::add_voter(env, &holder);
+
+    if fee_amount > 0 {
+        ProtocolFeeCollected {
+            policy_id,
+            version: POLICY_EVENT_VERSION,
+            fee_amount,
+            recipient: fee_recipient.clone(),
+        }
+        .publish(env);
+    }
 
     PolicyInitiated {
         version: POLICY_EVENT_VERSION,

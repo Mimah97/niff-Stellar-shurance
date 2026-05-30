@@ -71,6 +71,9 @@ pub const QUORUM_BPS_MAX: u32 = 10_000;
 /// One full turn-out / 100% weight in bps (used in the quorum formula below).
 pub const QUORUM_BPS_DENOMINATOR: u32 = 10_000;
 
+/// Absolute maximum protocol fee in basis points.
+pub const PROTOCOL_FEE_BPS_MAX: u32 = 1_000;
+
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]

@@ -72,6 +72,10 @@ pub enum DataKey {
     Token,
     /// Address where collected premiums are sent.
     Treasury,
+    /// Basis-point protocol fee deducted from each premium payment.
+    ProtocolFeeBps,
+    /// Address receiving the protocol fee portion of premiums.
+    FeeRecipient,
     PremiumTable,
     CalcAddress,
     /// Boolean allowlist flag per asset contract address.
@@ -291,6 +295,30 @@ pub fn get_treasury(env: &Env) -> Address {
     env.storage()
         .instance()
         .get(&DataKey::Treasury)
+        .unwrap_or_else(|| env.current_contract_address())
+}
+
+// ── Protocol fee config (instance) ───────────────────────────────────────────
+
+pub fn set_protocol_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::ProtocolFeeBps, &bps);
+}
+
+pub fn get_protocol_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ProtocolFeeBps)
+        .unwrap_or(0)
+}
+
+pub fn set_fee_recipient(env: &Env, recipient: &Address) {
+    env.storage().instance().set(&DataKey::FeeRecipient, recipient);
+}
+
+pub fn get_fee_recipient(env: &Env) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::FeeRecipient)
         .unwrap_or_else(|| env.current_contract_address())
 }
 

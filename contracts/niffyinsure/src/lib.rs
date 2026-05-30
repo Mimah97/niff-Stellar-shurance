@@ -60,6 +60,20 @@ struct QuorumUpdated {
     pub new_bps: u32,
 }
 
+#[contractevent(topics = ["niffyinsure", "protocol_fee_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProtocolFeeUpdated {
+    pub old_bps: u32,
+    pub new_bps: u32,
+}
+
+#[contractevent(topics = ["niffyinsure", "fee_recipient_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FeeRecipientUpdated {
+    pub old_recipient: Address,
+    pub new_recipient: Address,
+}
+
 #[contractevent(topics = ["niffyinsure", "pause_toggled"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PauseToggled {
@@ -85,6 +99,8 @@ impl NiffyInsure {
         storage::set_token(&env, &token);
         storage::set_multiplier_table(&env, &premium::default_multiplier_table(&env));
         storage::set_allowed_asset(&env, &token, true);
+        storage::set_protocol_fee_bps(&env, 0);
+        storage::set_fee_recipient(&env, &env.current_contract_address());
         storage::set_voting_duration_ledgers(&env, ledger::VOTE_WINDOW_LEDGERS);
         storage::set_quorum_bps(&env, types::DEFAULT_QUORUM_BPS);
         Ok(())
@@ -111,6 +127,14 @@ impl NiffyInsure {
     pub fn get_treasury_balance(env: Env) -> i128 {
         let token_addr = storage::get_token(&env);
         crate::token::get_treasury_balance(&env, &token_addr)
+    }
+
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        storage::get_protocol_fee_bps(&env)
+    }
+
+    pub fn get_fee_recipient(env: Env) -> Address {
+        storage::get_fee_recipient(&env)
     }
 
     /// Pure quote path: reads config and computes premium only.
@@ -207,6 +231,7 @@ impl NiffyInsure {
             55 => validate::Error::PayoutDeadlineNotReached,
             56 => validate::Error::VoteDelegated,
             57 => validate::Error::CircularDelegation,
+            58 => validate::Error::ProtocolFeeOutOfBounds,
             _ => validate::Error::ClaimNotApproved,
         };
         policy::map_quote_error(&env, err)
@@ -423,6 +448,35 @@ impl NiffyInsure {
         QuorumUpdated {
             old_bps: old,
             new_bps: quorum_bps,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    pub fn admin_set_protocol_fee_bps(env: Env, fee_bps: u32) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_instance(&env);
+        validate::validate_protocol_fee_bps(fee_bps)?;
+        let old = storage::get_protocol_fee_bps(&env);
+        storage::set_protocol_fee_bps(&env, fee_bps);
+        ProtocolFeeUpdated {
+            old_bps: old,
+            new_bps: fee_bps,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    pub fn admin_set_fee_recipient(env: Env, recipient: Address) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_instance(&env);
+        let old = storage::get_fee_recipient(&env);
+        storage::set_fee_recipient(&env, &recipient);
+        FeeRecipientUpdated {
+            old_recipient: old,
+            new_recipient: recipient,
         }
         .publish(&env);
         Ok(())

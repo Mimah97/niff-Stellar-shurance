@@ -75,6 +75,8 @@ pub enum Error {
     VoteDelegated = 56,
     /// Delegation would create a cycle in the vote-delegation graph.
     CircularDelegation = 57,
+    /// Protocol fee basis points exceed the configured absolute maximum.
+    ProtocolFeeOutOfBounds = 58,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
@@ -82,6 +84,14 @@ pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
     if !(QUORUM_BPS_MIN..=QUORUM_BPS_MAX).contains(&bps) {
         // Reuse bounded-config error code (Soroban `contracterror` caps variant count).
         return Err(Error::VotingDurationOutOfBounds);
+    }
+    Ok(())
+}
+
+pub fn validate_protocol_fee_bps(bps: u32) -> Result<(), Error> {
+    use crate::types::PROTOCOL_FEE_BPS_MAX;
+    if bps > PROTOCOL_FEE_BPS_MAX {
+        return Err(Error::ProtocolFeeOutOfBounds);
     }
     Ok(())
 }
