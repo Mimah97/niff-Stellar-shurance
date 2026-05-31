@@ -58,6 +58,15 @@ export class MetricsService implements OnModuleInit {
   /** Number of requests waiting for a free connection. */
   readonly dbPoolWaiting: client.Gauge<string>;
 
+  // ── Indexer deduplication metrics ────────────────────────────────────────
+  /**
+   * Total duplicate events detected during indexing (upsert conflict hit).
+   * Labels:
+   *  - `event_type`: raw_event | vote
+   *  - `network`: Stellar network identifier
+   */
+  readonly indexerDuplicateEvents: client.Counter<string>;
+
   // ── Redis cache metrics ───────────────────────────────────────────────────
   /** Total cache hits by key namespace (policy, claim, idempotency, …). */
   readonly redisCacheHits: client.Counter<string>;
@@ -206,6 +215,13 @@ export class MetricsService implements OnModuleInit {
       registers: [this.registry],
     });
 
+    this.indexerDuplicateEvents = new client.Counter({
+      name: 'indexer_duplicate_events_total',
+      help: 'Total duplicate events detected during indexing (upsert conflict)',
+      labelNames: ['event_type', 'network'],
+      registers: [this.registry],
+    });
+
     this.redisCacheHits = new client.Counter({
       name: 'redis_cache_hits_total',
       help: 'Total Redis cache hits by key namespace',
@@ -334,6 +350,10 @@ export class MetricsService implements OnModuleInit {
 
   recordRedisConnectionError() {
     this.redisConnectionErrors.inc();
+  }
+
+  recordDuplicateEvent(opts: { eventType: 'raw_event' | 'vote'; network: string }) {
+    this.indexerDuplicateEvents.inc({ event_type: opts.eventType, network: opts.network });
   }
 
   async getMetrics(): Promise<string> {

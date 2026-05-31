@@ -74,14 +74,14 @@ describe('IndexerService', () => {
     };
 
     const tx = {
-      rawEvent: { upsert: jest.fn() },
+      rawEvent: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
       ledgerCursor: {
         findUnique: jest.fn().mockResolvedValue({ lastProcessedLedger: 10 }),
         upsert: jest.fn(),
       },
       policy: { upsert: jest.fn() },
       claim: { upsert: jest.fn(), update: jest.fn() },
-      vote: { upsert: jest.fn() },
+      vote: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
     };
 
     const prisma = {
@@ -410,7 +410,7 @@ describe('IndexerService.processUntilCaughtUp — progress tracking', () => {
         findUnique: jest.fn().mockResolvedValue({ lastProcessedLedger: 901 }),
         upsert: jest.fn(),
       },
-      rawEvent: { upsert: jest.fn() },
+      rawEvent: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
     };
     // ledgerCursor.findUnique: first call for ensureCursor in processUntilCaughtUp,
     // then once per processNextBatchForNetwork call (2 batches), then once per progress update (2)
