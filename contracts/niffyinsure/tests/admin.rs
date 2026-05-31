@@ -18,7 +18,7 @@
 use niffyinsure::NiffyInsureClient;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, Env,
+    Address, Env, String,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -34,12 +34,24 @@ fn setup() -> (Env, NiffyInsureClient<'static>, Address, Address) {
     (env, client, admin, token)
 }
 
+fn events_debug(env: &Env) -> std::string::String {
+    soroban_sdk::testutils::arbitrary::std::format!("{:?}", env.events().all())
+}
+
+fn assert_admin_action_emitted(env: &Env, action_type: &str) {
+    let debug = events_debug(env);
+    assert!(
+        debug.contains("admin_action") && debug.contains(action_type),
+        "expected AdminAction audit event for {action_type}, got {debug}"
+    );
+}
+
 // ── initialize ────────────────────────────────────────────────────────────────
 
 #[test]
 fn initialize_succeeds_once() {
-    let (_env, _client, _admin, _token) = setup();
-    // If we get here without panic, initialize worked.
+    let (env, _client, _admin, _token) = setup();
+    assert_admin_action_emitted(&env, "initialize");
 }
 
 #[test]
@@ -169,7 +181,7 @@ fn set_token_emits_audit_event() {
     let (env, client, _, _) = setup();
     let new_token = Address::generate(&env);
     client.set_token(&new_token);
-    assert!(env.events().all().events().len() > 0);
+    assert_admin_action_emitted(&env, "set_token");
 }
 
 #[test]
@@ -213,7 +225,106 @@ fn admin_can_pause_and_unpause() {
 fn pause_emits_event() {
     let (env, client, admin, _) = setup();
     client.pause(&admin, &0u32);
-    assert!(env.events().all().events().len() > 0);
+    assert_admin_action_emitted(&env, "pause");
+}
+
+#[test]
+fn admin_entrypoints_emit_admin_action_audit_events() {
+    let (env, client, admin, _token) = setup();
+    let asset = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+
+    let new_token = Address::generate(&env);
+    client.set_token(&new_token);
+    assert_admin_action_emitted(&env, "set_token");
+
+    let new_treasury = Address::generate(&env);
+    client.set_treasury(&new_treasury);
+    assert_admin_action_emitted(&env, "set_treasury");
+
+    client.set_allowed_asset(&asset, &true, &String::from_str(&env, "USDC"), &7u32);
+    assert_admin_action_emitted(&env, "set_allowed_asset");
+
+    client.admin_set_vote_duration_ledgers(&120u32);
+    assert_admin_action_emitted(&env, "admin_set_vote_duration_ledgers");
+
+    client.admin_set_quorum_bps(&5_000u32);
+    assert_admin_action_emitted(&env, "admin_set_quorum_bps");
+
+    client.set_grace_period_ledgers(&1_000u32);
+    assert_admin_action_emitted(&env, "set_grace_period_ledgers");
+
+    let calculator = Address::generate(&env);
+    client.set_calculator(&calculator);
+    assert_admin_action_emitted(&env, "set_calculator");
+    client.clear_calculator();
+    assert_admin_action_emitted(&env, "clear_calculator");
+
+    let pending = Address::generate(&env);
+    client.propose_admin(&pending);
+    assert_admin_action_emitted(&env, "propose_admin");
+    client.cancel_admin();
+    assert_admin_action_emitted(&env, "cancel_admin");
+
+    client.set_sweep_cap(&Some(1_000_000i128));
+    assert_admin_action_emitted(&env, "set_sweep_cap");
+    client.set_sweep_notice_period(&0u32);
+    assert_admin_action_emitted(&env, "set_sweep_notice_period");
+
+    client.admin_set_max_evidence_count(&5u32);
+    assert_admin_action_emitted(&env, "admin_set_max_evidence_count");
+    client.admin_set_gateway_allowlist(&soroban_sdk::vec![&env, String::from_str(&env, "ipfs://")]);
+    assert_admin_action_emitted(&env, "admin_set_gateway_allowlist");
+
+    client.pause(&admin, &0u32);
+    assert_admin_action_emitted(&env, "pause");
+    client.unpause(&admin, &0u32);
+    assert_admin_action_emitted(&env, "unpause");
+    client.pause_bind(&admin, &0u32);
+    assert_admin_action_emitted(&env, "pause_bind");
+    client.pause_claims(&admin, &0u32);
+    assert_admin_action_emitted(&env, "pause_claims");
+
+    client.set_rolling_claim_cap(&1_000_000i128);
+    assert_admin_action_emitted(&env, "set_rolling_claim_cap");
+    client.set_rolling_claim_window_ledgers(&1_000u32);
+    assert_admin_action_emitted(&env, "set_rolling_claim_window_ledgers");
+    client.set_ttl_alert_threshold(&500_000u32);
+    assert_admin_action_emitted(&env, "set_ttl_alert_threshold");
+}
+
+#[test]
+fn failed_non_admin_call_does_not_emit_admin_action() {
+    let env = Env::default();
+    let cid = env.register(niffyinsure::NiffyInsure, ());
+    let client = NiffyInsureClient::new(&env, &cid);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let rando = Address::generate(&env);
+    env.mock_all_auths();
+    client.initialize(&admin, &token);
+    let before = env.events().all().events().len();
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &rando,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &cid,
+            fn_name: "set_token",
+            args: soroban_sdk::vec![
+                &env,
+                soroban_sdk::IntoVal::<Env, soroban_sdk::Val>::into_val(&token, &env)
+            ],
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert!(client.try_set_token(&token).is_err());
+    assert_eq!(
+        env.events().all().events().len(),
+        before,
+        "unauthorized call must not emit AdminAction"
+    );
 }
 
 // ── Two-step admin action: propose / confirm / cancel / expiry ────────────────

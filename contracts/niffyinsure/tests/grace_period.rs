@@ -44,7 +44,15 @@ fn seed(client: &NiffyInsureClient, holder: &Address, end_ledger: u32) {
 fn try_renew(client: &NiffyInsureClient, holder: &Address) -> bool {
     use niffyinsure::types::RenewPolicyOutcome;
     matches!(
-        client.try_renew_policy(holder, &1u32, &AgeBand::Adult, &CoverageTier::Basic, &50u32),
+        client.try_renew_policy(
+            holder,
+            &1u32,
+            &AgeBand::Adult,
+            &CoverageTier::Basic,
+            &50u32,
+            &None,
+            &None,
+        ),
         Ok(Ok(RenewPolicyOutcome::Renewed(_)))
     )
 }

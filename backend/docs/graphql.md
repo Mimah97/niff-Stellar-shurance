@@ -14,6 +14,8 @@ No resolver contains standalone business rules that diverge from the REST layer.
 - Path: `/api/graphql`
 - Driver: Apollo Server via `@nestjs/apollo`
 - Schema generation: code-first, emitted to `src/graphql/schema.gql`
+- WebSocket subscriptions use the same path and require
+  `connectionParams.Authorization = "Bearer <wallet-jwt>"`.
 
 ## Production policy
 
@@ -75,6 +77,13 @@ query PoliciesWithClaims {
   - `claims(policyId, deleted_at, createdAt)`
   - `votes(claimId, deleted_at)`
 
+## Subscriptions
+
+- `voteAdded(claimId: ID!)` publishes each indexed vote for the requested claim.
+- The indexer publishes through `VotePubSubService` after the vote row and claim tallies are persisted.
+- Unauthenticated WebSocket handshakes are rejected before subscription setup.
+- Staging should keep active GraphQL WebSocket connections within the documented ingress limit of 1,000 concurrent connections per API instance.
+
 ## Load testing
 
 Use [`loadtests/graphql-policy-claim-nested.js`](../loadtests/graphql-policy-claim-nested.js) against staging to validate:
@@ -82,3 +91,4 @@ Use [`loadtests/graphql-policy-claim-nested.js`](../loadtests/graphql-policy-cla
 - nested query latency under representative concurrency
 - deterministic rejection of deep malicious queries
 - no regression after schema or index changes
+- vote subscription connection counts remain below the 1,000 connection per-instance limit

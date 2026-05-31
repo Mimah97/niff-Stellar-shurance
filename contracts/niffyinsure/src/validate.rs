@@ -55,6 +55,8 @@ pub enum Error {
     RateLimitExceeded = 42,
     /// Evidence URL does not match IPFS or allowlisted gateway format.
     InvalidEvidenceUrl = 43,
+    /// Contract payout recipients must be allowlisted.
+    PayoutRecipientContractNotAllowlisted = 48,
     /// Admin `set_voting_duration_ledgers` value outside allowed [min, max] range.
     VotingDurationOutOfBounds = 49,
     /// Batch get exceeded POLICY_BATCH_GET_MAX.
@@ -71,16 +73,16 @@ pub enum Error {
     RollingClaimCapExceeded = 54,
     /// Keeper `process_payout_timeout` called before the approved payout deadline elapsed.
     PayoutDeadlineNotReached = 55,
-    /// Caller attempted to vote directly while an active delegation is in force.
-    VoteDelegated = 56,
-    /// Delegation would create a cycle in the vote-delegation graph.
-    CircularDelegation = 57,
-    /// Protocol fee basis points exceed the configured absolute maximum.
-    ProtocolFeeOutOfBounds = 58,
-    /// Minimum solvency ratio basis points outside documented bounds.
-    SolvencyRatioOutOfBounds = 59,
-    /// Batch get exceeded CLAIM_BATCH_GET_MAX.
-    ClaimBatchTooLarge = 60,
+    /// Claim amount is below the asset-specific minimum (issue #587).
+    ClaimBelowMinAmount = 56,
+    /// Claim amount exceeds the asset-specific maximum (issue #587).
+    ClaimAboveMaxAmount = 57,
+    /// Delegation not found or expired (issue #585).
+    DelegationInvalid = 58,
+    /// Operator lacks the required permission for this action (issue #585).
+    DelegationPermissionDenied = 59,
+    /// Primary treasury insufficient and no reinsurance configured (issue #581).
+    NoReinsuranceConfigured = 60,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {
@@ -165,6 +167,10 @@ pub fn check_claim_fields(
     let max_evidence = crate::storage::get_max_evidence_count(env);
     if evidence.len() > max_evidence {
         return Err(Error::TooManyImageUrls);
+    }
+    let min_evidence = crate::storage::get_min_evidence_count(env);
+    if evidence.len() < min_evidence {
+        return Err(Error::InsufficientEvidence);
     }
     for entry in evidence.iter() {
         if entry.url.len() > IMAGE_URL_MAX_LEN {
@@ -536,3 +542,11 @@ mod evidence_url_validation_tests {
         });
     }
 }
+    /// Claim evidence update must happen before any votes are cast.
+    ClaimEvidenceUpdateNotAllowed = 44,
+    /// Evidence count must fit the configured min/max bounds.
+    EvidenceCountOutOfBounds = 45,
+    /// Treasury deposits must be strictly positive.
+    ZeroTreasuryDeposit = 46,
+    /// Caller is not on the authorized treasury depositor allowlist.
+    UnauthorizedTreasuryDepositor = 47,

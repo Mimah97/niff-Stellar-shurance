@@ -10,6 +10,7 @@
  */
 
 import { VotePubSubService, VoteEvent } from './vote-pubsub.service';
+import jwt from 'jsonwebtoken';
 
 // ── Mock graphql-redis-subscriptions ─────────────────────────────────────────
 
@@ -109,5 +110,26 @@ describe('GraphqlWalletAuthGuard on subscription', () => {
     } as never);
 
     await expect(guard.canActivate(context as never)).rejects.toThrow('Wallet authentication is required');
+  });
+});
+
+describe('wallet JWT WebSocket handshake helpers', () => {
+  it('accepts wallet JWTs from connection params', async () => {
+    const { assertWalletJwt, authorizationFromConnectionParams } = await import('./graphql.module');
+    const token = jwt.sign({ walletAddress: 'GWALLET123' }, 'secret');
+    const config = { get: jest.fn(() => 'secret') };
+
+    const authorization = authorizationFromConnectionParams({ Authorization: `Bearer ${token}` });
+
+    expect(() => assertWalletJwt(config as never, authorization)).not.toThrow();
+  });
+
+  it('rejects unauthenticated subscription handshakes', async () => {
+    const { assertWalletJwt } = await import('./graphql.module');
+    const config = { get: jest.fn(() => 'secret') };
+
+    expect(() => assertWalletJwt(config as never, undefined)).toThrow(
+      'Wallet authentication is required',
+    );
   });
 });

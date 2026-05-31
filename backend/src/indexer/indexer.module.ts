@@ -9,10 +9,11 @@ import { ReconciliationService } from './reconciliation.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RpcModule } from '../rpc/rpc.module';
 import { EventsModule } from '../events/events.module';
+import { ClaimPayoutVerificationService } from '../claims/services/claim-payout-verification.service';
 
 @Module({
   imports: [PrismaModule, RpcModule, ConfigModule, ScheduleModule.forRoot(), EventsModule],
-  providers: [IndexerService, IndexerWorker, ReindexWorkerService, BackfillWorkerService, ReconciliationService],
+  providers: [IndexerService, ClaimPayoutVerificationService, IndexerWorker, ReindexWorkerService, BackfillWorkerService, ReconciliationService],
   exports: [IndexerService, ReconciliationService],
 })
 export class IndexerModule {}

@@ -1,6 +1,7 @@
 # Environment Variables Reference
 
-Source of truth: `backend/src/config/env.definitions.ts` (backend) and `frontend/src/config/env.ts` (frontend).
+> **Auto-generated** from `backend/src/config/env.definitions.ts`.
+> Do not edit manually — run `npm run env:example:generate` in `backend/` to regenerate.
 
 ## Requirement labels
 
@@ -12,241 +13,204 @@ Source of truth: `backend/src/config/env.definitions.ts` (backend) and `frontend
 
 ---
 
-## Backend (`backend/.env`)
+## Core
 
-Validation runs at startup via `validateEnvironment()` wired into NestJS `ConfigModule`.  
-A missing or invalid required variable throws with a list of all failures before the process binds any port.
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `NODE_ENV` | `required` | Runtime environment name used for validation and defaults. | `development` |
+| `PORT` | `required` | HTTP port bound by the Nest API process. | `3000` |
+| `DATABASE_URL` | `required` | Primary PostgreSQL connection string. Use a least-privilege application user for writes. *(secret)* | `postgresql://niffy_app:replace-me@localhost:5432/niffyinsure?schema=public` |
+| `REDIS_URL` | `required` | Redis connection string for cache, queues, and nonce storage. *(secret)* | `redis://localhost:6379/0` |
 
-Generate or update `.env.example`:
-```bash
-cd backend && npm run env:example:generate
-```
+## Stellar
 
-Verify `.env.example` is not drifted from `env.definitions.ts`:
-```bash
-cd backend && npm run env:example:check
-```
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `STELLAR_NETWORK` | `required` | Active Stellar network for RPC, Horizon, and contract resolution. | `testnet` |
+| `SOROBAN_RPC_URL` | `required` | Soroban RPC endpoint for the active network. | `https://soroban-testnet.stellar.org` |
+| `HORIZON_URL` | `required` | Horizon endpoint for the active network. | `https://horizon-testnet.stellar.org` |
+| `STELLAR_NETWORK_PASSPHRASE` | `required` | Canonical network passphrase matching STELLAR_NETWORK. | `Test SDF Network ; September 2015` |
+| `CONTRACT_ID` | `optional` | Default deployed niffyinsure contract ID for the active network. | — |
+| `DEFAULT_TOKEN_CONTRACT_ID` | `optional` | Default SEP-41 token contract ID used when no asset override is supplied. | — |
+| `SOROBAN_RPC_URL_TESTNET` | `optional` | Optional per-network RPC override for testnet. | — |
+| `SOROBAN_RPC_URL_MAINNET` | `optional` | Optional per-network RPC override for mainnet. | — |
+| `SOROBAN_RPC_URL_FUTURENET` | `optional` | Optional per-network RPC override for futurenet. | — |
+| `HORIZON_URL_TESTNET` | `optional` | Optional per-network Horizon override for testnet. | — |
+| `HORIZON_URL_MAINNET` | `optional` | Optional per-network Horizon override for mainnet. | — |
+| `HORIZON_URL_FUTURENET` | `optional` | Optional per-network Horizon override for futurenet. | — |
+| `CONTRACT_ID_TESTNET` | `optional` | Optional per-network contract override for testnet. | — |
+| `CONTRACT_ID_MAINNET` | `conditional` | Optional per-network contract override for mainnet. | — |
+| `CONTRACT_ID_FUTURENET` | `optional` | Optional per-network contract override for futurenet. | — |
+| `DEFAULT_TOKEN_CONTRACT_ID_TESTNET` | `optional` | Optional per-network default token contract override for testnet. | — |
+| `DEFAULT_TOKEN_CONTRACT_ID_MAINNET` | `optional` | Optional per-network default token contract override for mainnet. | — |
+| `DEFAULT_TOKEN_CONTRACT_ID_FUTURENET` | `optional` | Optional per-network default token contract override for futurenet. | — |
+| `INDEXER_GAP_ALERT_THRESHOLD_LEDGERS` | `required` | Alert when chain head minus last processed ledger exceeds this value. | `100` |
+| `INDEXER_GAP_ALERT_COOLDOWN_MS` | `required` | Minimum milliseconds between repeated indexer gap alerts. | `3600000` |
+| `INDEXER_BATCH_SIZE` | `optional` | Max ledger events fetched per Soroban RPC call (1–100, default 50). | `50` |
+| `MAX_BACKFILL_LEDGER_RANGE` | `optional` | Maximum ledger range allowed per backfill request. Requests exceeding this are rejected before any jobs are created. | `100000` |
+| `HORIZON_API_KEY` | `optional` | Optional Horizon API key for managed providers that require one. *(secret)* | — |
 
-### Core
+## IPFS
 
-| Variable | Required | Description |
-|---|---|---|
-| `NODE_ENV` | required | Runtime environment: `development`, `production`, `test` |
-| `PORT` | required | HTTP port bound by the Nest API process. Default: `3000` |
-| `DATABASE_URL` | required | PostgreSQL connection string (`postgresql://...`) |
-| `REDIS_URL` | required | Redis connection string (`redis://...` or `rediss://...`) |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `IPFS_PROVIDER` | `required` | IPFS provider implementation to use. | `mock` |
+| `PINATA_API_KEY` | `conditional` | Pinata API key when IPFS_PROVIDER=pinata. *(secret)* | — |
+| `PINATA_API_SECRET` | `conditional` | Pinata API secret when IPFS_PROVIDER=pinata. *(secret)* | — |
+| `PINATA_GATEWAY_URL` | `required` | Gateway base URL used for Pinata-backed retrievals. | `https://gateway.pinata.cloud/ipfs` |
+| `IPFS_MAX_FILE_SIZE` | `required` | Maximum allowed IPFS upload size in bytes. | `52428800` |
+| `IPFS_MIN_FILE_SIZE` | `required` | Minimum allowed IPFS upload size in bytes. | `1` |
+| `IPFS_STRIP_EXIF` | `required` | Strip EXIF metadata from supported uploads before pinning. | `true` |
+| `IPFS_GATEWAY` | `required` | Public gateway base used for viewing claim evidence. | `https://ipfs.io` |
+| `ALLOWED_IPFS_GATEWAYS` | `optional` | Comma-separated list of allowed IPFS gateway hostnames for evidence URL validation. Defaults to the built-in list when empty. Changes take effect on next deploy (no restart needed for env-only changes). | `ipfs.io,cloudflare-ipfs.com,gateway.pinata.cloud,dweb.link,nftstorage.link` |
+| `IPFS_PROJECT_ID` | `optional` | Legacy IPFS project identifier kept for compatibility. *(secret)* | — |
+| `IPFS_PROJECT_SECRET` | `optional` | Legacy IPFS project secret kept for compatibility. *(secret)* | — |
 
-### Stellar
+## Auth
 
-| Variable | Required | Description |
-|---|---|---|
-| `STELLAR_NETWORK` | required | Active network: `testnet`, `mainnet`, `futurenet` |
-| `SOROBAN_RPC_URL` | required | Soroban RPC endpoint for the active network |
-| `HORIZON_URL` | required | Horizon endpoint for the active network |
-| `STELLAR_NETWORK_PASSPHRASE` | required | Canonical network passphrase matching `STELLAR_NETWORK` |
-| `CONTRACT_ID` | optional | Default niffyinsure contract ID for the active network |
-| `DEFAULT_TOKEN_CONTRACT_ID` | optional | Default SEP-41 token contract ID |
-| `SOROBAN_RPC_URL_TESTNET` | optional | Per-network RPC override for testnet |
-| `SOROBAN_RPC_URL_MAINNET` | optional | Per-network RPC override for mainnet |
-| `SOROBAN_RPC_URL_FUTURENET` | optional | Per-network RPC override for futurenet |
-| `HORIZON_URL_TESTNET` | optional | Per-network Horizon override for testnet |
-| `HORIZON_URL_MAINNET` | optional | Per-network Horizon override for mainnet |
-| `HORIZON_URL_FUTURENET` | optional | Per-network Horizon override for futurenet |
-| `CONTRACT_ID_TESTNET` | optional | Per-network contract override for testnet |
-| `CONTRACT_ID_MAINNET` | conditional | Required when `STELLAR_NETWORK=mainnet` |
-| `CONTRACT_ID_FUTURENET` | optional | Per-network contract override for futurenet |
-| `DEFAULT_TOKEN_CONTRACT_ID_TESTNET` | optional | Per-network token contract override for testnet |
-| `DEFAULT_TOKEN_CONTRACT_ID_MAINNET` | optional | Per-network token contract override for mainnet |
-| `DEFAULT_TOKEN_CONTRACT_ID_FUTURENET` | optional | Per-network token contract override for futurenet |
-| `INDEXER_GAP_ALERT_THRESHOLD_LEDGERS` | required | Alert when chain head minus last processed ledger exceeds this. Default: `100` |
-| `INDEXER_GAP_ALERT_COOLDOWN_MS` | required | Minimum ms between repeated indexer gap alerts. Default: `3600000` |
-| `HORIZON_API_KEY` | optional | API key for managed Horizon providers |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `JWT_SECRET` | `required` | HMAC signing secret for user/admin JWTs. Rotate independently per environment. *(secret)* | `replace-with-64-byte-base64url-key` |
+| `JWT_EXPIRES_IN` | `required` | JWT access token lifetime. | `7d` |
+| `JWT_REFRESH_EXPIRES_IN` | `required` | Refresh token lifetime for legacy auth surfaces. | `30d` |
+| `JWT_ISSUER` | `required` | JWT issuer claim. | `niffyinsure` |
+| `JWT_AUDIENCE` | `required` | JWT audience claim. | `niffyinsure-api` |
+| `ADMIN_TOKEN` | `required` | Bootstrap/admin automation token used by operational surfaces. *(secret)* | `replace-with-long-random-admin-token` |
+| `AUTH_DOMAIN` | `required` | Human-readable domain embedded in wallet challenge messages. | `app.niffyinsure.local` |
+| `NONCE_TTL_SECONDS` | `required` | Wallet login challenge lifetime in seconds. | `300` |
+| `PAGINATION_HMAC_SECRET` | `optional` | HMAC secret for tamper-resistant pagination cursors. *(secret)* | — |
+| `JWT_SECRET_NEXT` | `optional` | Incoming JWT signing key for zero-downtime rotation overlap. Set to the new key while JWT_SECRET still holds the current key. Tokens signed by either key are accepted during the overlap window. Remove after all tokens signed with the old JWT_SECRET have expired. *(secret)* | — |
 
-### IPFS
+## HTTP
 
-| Variable | Required | Description |
-|---|---|---|
-| `IPFS_PROVIDER` | required | `mock` or `pinata` |
-| `PINATA_API_KEY` | conditional | Required when `IPFS_PROVIDER=pinata` |
-| `PINATA_API_SECRET` | conditional | Required when `IPFS_PROVIDER=pinata` |
-| `PINATA_GATEWAY_URL` | required | Gateway base URL for Pinata retrievals |
-| `IPFS_MAX_FILE_SIZE` | required | Max upload size in bytes. Default: `52428800` (50 MB) |
-| `IPFS_MIN_FILE_SIZE` | required | Min upload size in bytes. Default: `1` |
-| `IPFS_STRIP_EXIF` | required | Strip EXIF metadata before pinning. Default: `true` |
-| `IPFS_GATEWAY` | required | Public gateway base for viewing evidence. Default: `https://ipfs.io` |
-| `ALLOWED_IPFS_GATEWAYS` | optional | Comma-separated allowed gateway hostnames |
-| `IPFS_PROJECT_ID` | optional | Legacy IPFS project identifier |
-| `IPFS_PROJECT_SECRET` | optional | Legacy IPFS project secret |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `FRONTEND_ORIGINS` | `required` | Comma-separated public frontend origins allowed by CORS. | `http://localhost:3001` |
+| `ADMIN_CORS_ORIGINS` | `optional` | Comma-separated admin UI origins allowed by CORS. | `http://localhost:3002` |
 
-### Auth
+## Observability
 
-| Variable | Required | Description |
-|---|---|---|
-| `JWT_SECRET` | required | HMAC signing secret (min 32 chars). Must be rotated in production |
-| `JWT_EXPIRES_IN` | required | Access token lifetime, e.g. `7d` |
-| `JWT_REFRESH_EXPIRES_IN` | required | Refresh token lifetime, e.g. `30d` |
-| `JWT_ISSUER` | required | JWT issuer claim. Default: `niffyinsure` |
-| `JWT_AUDIENCE` | required | JWT audience claim. Default: `niffyinsure-api` |
-| `ADMIN_TOKEN` | required | Bootstrap/admin automation token (min 24 chars). Must be rotated in production |
-| `AUTH_DOMAIN` | required | Domain embedded in wallet challenge messages |
-| `NONCE_TTL_SECONDS` | required | Wallet login challenge lifetime in seconds. Default: `300` |
-| `PAGINATION_HMAC_SECRET` | optional | HMAC secret for tamper-resistant pagination cursors |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `LOG_LEVEL` | `required` | Minimum application log level. | `info` |
 
-### HTTP
+## Caching
 
-| Variable | Required | Description |
-|---|---|---|
-| `FRONTEND_ORIGINS` | required | Comma-separated CORS-allowed frontend origins. Must use `https://` in production |
-| `ADMIN_CORS_ORIGINS` | optional | Comma-separated CORS-allowed admin UI origins |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `CACHE_TTL_SECONDS` | `required` | Default cache TTL in seconds for cache-backed reads. | `60` |
+| `QUOTE_SIMULATION_CACHE_ENABLED` | `required` | Enable Redis caching for successful quote simulations. | `true` |
+| `QUOTE_SIMULATION_CACHE_TTL_SECONDS` | `required` | TTL for cached quote simulation results in seconds. | `30` |
 
-### Observability
+## Support
 
-| Variable | Required | Description |
-|---|---|---|
-| `LOG_LEVEL` | required | Minimum log level: `error`, `warn`, `log`, `verbose`, `debug`. Default: `info` |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `CAPTCHA_PROVIDER` | `required` | CAPTCHA provider for public support/contact forms. | `turnstile` |
+| `CAPTCHA_SECRET_KEY` | `required` | Server-side CAPTCHA verification secret. *(secret)* | `dev-skip` |
+| `CAPTCHA_SITE_KEY` | `optional` | Public CAPTCHA site key exposed to the frontend. | — |
+| `IP_HASH_SALT` | `required` | Salt used when hashing IP addresses for privacy-safe deduplication. *(secret)* | `replace-with-random-hex` |
 
-### Caching
+## Multi-tenancy
 
-| Variable | Required | Description |
-|---|---|---|
-| `CACHE_TTL_SECONDS` | required | Default cache TTL in seconds. Default: `60` |
-| `QUOTE_SIMULATION_CACHE_ENABLED` | required | Enable Redis caching for quote simulations. Default: `true` |
-| `QUOTE_SIMULATION_CACHE_TTL_SECONDS` | required | Quote simulation cache TTL in seconds. Default: `30` |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `TENANT_RESOLUTION_ENABLED` | `required` | Enable tenant resolution from hostnames/headers. | `false` |
+| `TENANT_BASE_DOMAIN` | `required` | Base domain used for subdomain-based tenant resolution. | `niffyinsur.com` |
 
-### Support / CAPTCHA
+## Operations
 
-| Variable | Required | Description |
-|---|---|---|
-| `CAPTCHA_PROVIDER` | required | `turnstile` or `hcaptcha`. Default: `turnstile` |
-| `CAPTCHA_SECRET_KEY` | required | Server-side CAPTCHA verification secret. Must not be `dev-skip` in production |
-| `CAPTCHA_SITE_KEY` | optional | Public CAPTCHA site key |
-| `IP_HASH_SALT` | required | Salt for privacy-safe IP deduplication (min 16 chars). Must be rotated in production |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `DATA_RETENTION_DAYS` | `required` | Days to retain soft-deleted rows before purge jobs hard-delete them. | `730` |
+| `SSE_MAX_CONNECTIONS` | `required` | Maximum concurrent SSE connections. | `500` |
+| `SOLVENCY_MONITORING_ENABLED` | `required` | Enable scheduled solvency monitoring. | `true` |
+| `SOLVENCY_CRON_EXPRESSION` | `required` | Cron expression for solvency monitoring runs. | `0 */15 * * * *` |
+| `SOLVENCY_BUFFER_THRESHOLD_STROOPS` | `required` | Minimum treasury buffer before solvency warnings fire. | `0` |
+| `SOLVENCY_SIMULATION_SOURCE_ACCOUNT` | `optional` | Optional Stellar account used for solvency simulation calls. | — |
+| `SOLVENCY_TENANT_ID` | `optional` | Optional tenant identifier to scope solvency monitoring. | — |
+| `SOLVENCY_ALERT_WEBHOOK_URL` | `optional` | Webhook URL that receives solvency alert notifications. *(secret)* | — |
+| `SOLVENCY_ALERT_WEBHOOK_SECRET` | `optional` | Shared secret sent with solvency alert webhooks. *(secret)* | — |
+| `WASM_DRIFT_WEBHOOK_URL` | `optional` | Webhook URL that receives wasm drift alerts. *(secret)* | — |
+| `WASM_DRIFT_WEBHOOK_SECRET` | `optional` | Shared secret sent with wasm drift alerts. *(secret)* | — |
+| `DEPLOYMENT_REGISTRY_PATH` | `required` | Path to the contract deployment registry JSON file. | `contracts/deployment-registry.json` |
+| `NIFFYINSURE_EXPECTED_WASM_HASH` | `optional` | Expected SHA-256 hash of the authorised niffyinsure wasm artifact. | — |
+| `DISABLE_REINDEX_WORKER` | `required` | Disable the legacy reindex worker in environments where it should not start. | `0` |
+| `RENEWAL_REMINDER_CRON` | `required` | Cron expression for renewal reminder background jobs. | `0 * * * *` |
 
-### Multi-tenancy
+## Database
 
-| Variable | Required | Description |
-|---|---|---|
-| `TENANT_RESOLUTION_ENABLED` | required | Enable tenant resolution from hostnames/headers. Default: `false` |
-| `TENANT_BASE_DOMAIN` | required | Base domain for subdomain-based tenant resolution |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `DB_POOL_MAX` | `required` | Maximum Prisma connection pool size. | `10` |
+| `DB_POOL_MIN` | `required` | Minimum warm Prisma connections. | `2` |
+| `DB_POOL_IDLE_TIMEOUT_MS` | `required` | Idle connection reclaim timeout in milliseconds. | `30000` |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | `required` | Maximum time to wait for a free DB connection in milliseconds. | `5000` |
+| `DB_SLOW_QUERY_MS` | `required` | Warn when an individual DB query exceeds this latency threshold. | `250` |
 
-### Database
+## GraphQL
 
-| Variable | Required | Description |
-|---|---|---|
-| `DB_POOL_MAX` | required | Maximum Prisma connection pool size. Default: `10` |
-| `DB_POOL_MIN` | required | Minimum warm Prisma connections. Default: `2` |
-| `DB_POOL_IDLE_TIMEOUT_MS` | required | Idle connection reclaim timeout in ms. Default: `30000` |
-| `DB_POOL_CONNECTION_TIMEOUT_MS` | required | Max wait for a free DB connection in ms. Default: `5000` |
-| `DB_SLOW_QUERY_MS` | required | Warn when a query exceeds this latency. Default: `250` |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `GRAPHQL_ENABLED` | `required` | Enable the GraphQL endpoint. | `true` |
+| `GRAPHQL_PATH` | `required` | HTTP path mounted for GraphQL requests. | `/graphql` |
+| `GRAPHQL_INTROSPECTION_IN_PRODUCTION` | `required` | Allow GraphQL schema introspection when NODE_ENV=production. | `false` |
+| `GRAPHQL_MAX_DEPTH` | `required` | Maximum allowed GraphQL selection depth. | `8` |
+| `GRAPHQL_MAX_COMPLEXITY` | `required` | Maximum estimated GraphQL query complexity. | `250` |
+| `MAX_QUERY_DEPTH` | `optional` | Maximum GraphQL selection depth (overrides GRAPHQL_MAX_DEPTH when set). | `8` |
+| `MAX_QUERY_COMPLEXITY` | `optional` | Maximum GraphQL query complexity score (overrides GRAPHQL_MAX_COMPLEXITY when set). | `250` |
+| `GRAPHQL_RATE_LIMIT_MAX` | `required` | Maximum GraphQL operations allowed per rate-limit window. | `60` |
+| `GRAPHQL_RATE_LIMIT_WINDOW_MS` | `required` | GraphQL rate-limit window in milliseconds. | `60000` |
+| `GRAPHQL_SLOW_OPERATION_MS` | `required` | Warn when a GraphQL operation exceeds this latency threshold. | `750` |
+| `GRAPHQL_PERSISTED_QUERIES_ENABLED` | `required` | Enable Apollo-style automatic persisted queries. | `false` |
+| `GRAPHQL_PERSISTED_QUERY_TTL_SECONDS` | `required` | Persisted GraphQL query cache TTL in seconds. | `86400` |
+| `GRAPHQL_POLICY_CLAIMS_DEFAULT_LIMIT` | `required` | Default nested policy.claims page size. | `10` |
+| `GRAPHQL_POLICY_CLAIMS_MAX_LIMIT` | `required` | Maximum nested policy.claims page size. | `25` |
 
-### GraphQL
+## Notifications
 
-| Variable | Required | Description |
-|---|---|---|
-| `GRAPHQL_ENABLED` | required | Enable the GraphQL endpoint. Default: `true` |
-| `GRAPHQL_PATH` | required | HTTP path for GraphQL. Default: `/graphql` |
-| `GRAPHQL_INTROSPECTION_IN_PRODUCTION` | required | Allow introspection in production. Default: `false` |
-| `GRAPHQL_MAX_DEPTH` | required | Maximum selection depth. Default: `8` |
-| `GRAPHQL_MAX_COMPLEXITY` | required | Maximum query complexity. Default: `250` |
-| `GRAPHQL_RATE_LIMIT_MAX` | required | Max operations per rate-limit window. Default: `60` |
-| `GRAPHQL_RATE_LIMIT_WINDOW_MS` | required | Rate-limit window in ms. Default: `60000` |
-| `GRAPHQL_SLOW_OPERATION_MS` | required | Warn when an operation exceeds this latency. Default: `750` |
-| `GRAPHQL_PERSISTED_QUERIES_ENABLED` | required | Enable persisted queries. Default: `false` |
-| `GRAPHQL_PERSISTED_QUERY_TTL_SECONDS` | required | Persisted query cache TTL. Default: `86400` |
-| `GRAPHQL_POLICY_CLAIMS_DEFAULT_LIMIT` | required | Default nested claims page size. Default: `10` |
-| `GRAPHQL_POLICY_CLAIMS_MAX_LIMIT` | required | Maximum nested claims page size. Default: `25` |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `SMTP_HOST` | `required` | SMTP host for outbound email notifications. | `127.0.0.1` |
+| `SMTP_PORT` | `required` | SMTP port for outbound email notifications. | `1025` |
+| `SMTP_USER` | `optional` | SMTP username when authenticated mail delivery is enabled. *(secret)* | — |
+| `SMTP_PASS` | `optional` | SMTP password when authenticated mail delivery is enabled. *(secret)* | — |
+| `SMTP_FROM` | `required` | From address used for outbound notification emails. | `no-reply@niffyinsure.local` |
+| `TELEGRAM_BOT_TOKEN` | `optional` | Telegram Bot API token for optional claim notifications. *(secret)* | — |
+| `DISCORD_WEBHOOK_URL` | `optional` | Discord webhook URL for optional claim notifications. *(secret)* | — |
 
-### Notifications
+## Feature flags
 
-| Variable | Required | Description |
-|---|---|---|
-| `SMTP_HOST` | required | SMTP host. Default: `127.0.0.1` |
-| `SMTP_PORT` | required | SMTP port. Default: `1025` |
-| `SMTP_USER` | optional | SMTP username for authenticated delivery |
-| `SMTP_PASS` | optional | SMTP password for authenticated delivery |
-| `SMTP_FROM` | required | From address for notification emails |
-| `TELEGRAM_BOT_TOKEN` | optional | Telegram Bot API token |
-| `DISCORD_WEBHOOK_URL` | optional | Discord webhook URL |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `FEATURE_FLAGS_JSON` | `optional` | JSON object containing backend feature flags. | `{"ramp":false}` |
+| `FEATURE_FLAGS_DISABLED_STATUS` | `required` | HTTP status returned when a feature flag is disabled. | `404` |
 
-### Feature flags
+## Ramp
 
-| Variable | Required | Description |
-|---|---|---|
-| `FEATURE_FLAGS_JSON` | optional | JSON object of backend feature flags, e.g. `{"ramp":false}` |
-| `FEATURE_FLAGS_DISABLED_STATUS` | required | HTTP status when a flag is disabled: `403` or `404`. Default: `404` |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `RAMP_URL` | `optional` | Base URL for the optional fiat on-ramp integration. | — |
+| `RAMP_ALLOWED_REGIONS` | `optional` | Comma-separated ISO region codes where the on-ramp is allowed. | — |
+| `RAMP_UTM_SOURCE` | `required` | UTM source appended to ramp URLs. | `niffyinsure` |
+| `RAMP_UTM_MEDIUM` | `required` | UTM medium appended to ramp URLs. | `app` |
+| `RAMP_UTM_CAMPAIGN` | `required` | UTM campaign appended to ramp URLs. | `onramp` |
 
-### Ramp
+## Webhooks
 
-| Variable | Required | Description |
-|---|---|---|
-| `RAMP_URL` | optional | Base URL for the fiat on-ramp integration |
-| `RAMP_ALLOWED_REGIONS` | optional | Comma-separated ISO region codes where on-ramp is allowed |
-| `RAMP_UTM_SOURCE` | required | UTM source appended to ramp URLs. Default: `niffyinsure` |
-| `RAMP_UTM_MEDIUM` | required | UTM medium appended to ramp URLs. Default: `app` |
-| `RAMP_UTM_CAMPAIGN` | required | UTM campaign appended to ramp URLs. Default: `onramp` |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `WEBHOOK_SECRET_GITHUB` | `optional` | GitHub webhook secret for signature verification. *(secret)* | — |
+| `WEBHOOK_SECRET_STRIPE` | `optional` | Stripe webhook secret for signature verification. *(secret)* | — |
+| `WEBHOOK_SECRET_GENERIC` | `optional` | Generic webhook secret for signature verification. *(secret)* | — |
+| `WEBHOOK_IP_ALLOWLIST_GITHUB` | `optional` | Optional comma-separated IP allowlist for GitHub webhooks. | — |
+| `WEBHOOK_IP_ALLOWLIST_STRIPE` | `optional` | Optional comma-separated IP allowlist for Stripe webhooks. | — |
+| `WEBHOOK_IP_ALLOWLIST_GENERIC` | `optional` | Optional comma-separated IP allowlist for generic webhooks. | — |
 
-### Operations
+## Evidence uploads
 
-| Variable | Required | Description |
-|---|---|---|
-| `SSE_MAX_CONNECTIONS` | required | Maximum concurrent SSE connections. Default: `500` |
-| `DATA_RETENTION_DAYS` | required | Days to retain soft-deleted rows before purge. Default: `730` |
-| `SOLVENCY_MONITORING_ENABLED` | required | Enable scheduled solvency monitoring. Default: `true` |
-| `SOLVENCY_CRON_EXPRESSION` | required | Cron expression for solvency runs. Default: `0 */15 * * * *` |
-| `SOLVENCY_BUFFER_THRESHOLD_STROOPS` | required | Minimum treasury buffer before warnings fire. Default: `0` |
-| `SOLVENCY_SIMULATION_SOURCE_ACCOUNT` | optional | Stellar account for solvency simulation calls |
-| `SOLVENCY_TENANT_ID` | optional | Tenant identifier to scope solvency monitoring |
-| `SOLVENCY_ALERT_WEBHOOK_URL` | optional | Webhook URL for solvency alert notifications |
-| `SOLVENCY_ALERT_WEBHOOK_SECRET` | optional | Shared secret for solvency alert webhooks |
-| `WASM_DRIFT_WEBHOOK_URL` | optional | Webhook URL for wasm drift alerts |
-| `WASM_DRIFT_WEBHOOK_SECRET` | optional | Shared secret for wasm drift alerts |
-| `DEPLOYMENT_REGISTRY_PATH` | required | Path to the contract deployment registry JSON. Default: `contracts/deployment-registry.json` |
-| `NIFFYINSURE_EXPECTED_WASM_HASH` | optional | Expected SHA-256 hash of the authorised wasm artifact |
-| `DISABLE_REINDEX_WORKER` | required | Disable the legacy reindex worker: `0` or `1`. Default: `0` |
-| `RENEWAL_REMINDER_CRON` | required | Cron expression for renewal reminder jobs. Default: `0 * * * *` |
-
-### Webhooks
-
-| Variable | Required | Description |
-|---|---|---|
-| `WEBHOOK_SECRET_GITHUB` | optional | GitHub webhook secret for signature verification |
-| `WEBHOOK_SECRET_STRIPE` | optional | Stripe webhook secret for signature verification |
-| `WEBHOOK_SECRET_GENERIC` | optional | Generic webhook secret for signature verification |
-| `WEBHOOK_IP_ALLOWLIST_GITHUB` | optional | Comma-separated IP allowlist for GitHub webhooks |
-| `WEBHOOK_IP_ALLOWLIST_STRIPE` | optional | Comma-separated IP allowlist for Stripe webhooks |
-| `WEBHOOK_IP_ALLOWLIST_GENERIC` | optional | Comma-separated IP allowlist for generic webhooks |
-
----
-
-## Frontend (`frontend/.env.local`)
-
-Validation runs at module load time via `zod` in `frontend/src/config/env.ts`.  
-A missing or invalid required variable throws before any page renders.  
-Additionally, `next.config.mjs` validates required vars at `next build` time so CI catches misconfigurations before deployment.
-
-| Variable | Required | Description |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | required | Backend REST API base URL — no trailing slash |
-| `NEXT_PUBLIC_SOROBAN_RPC_URL` | optional | Soroban RPC endpoint. Default: `https://soroban-testnet.stellar.org` |
-| `NEXT_PUBLIC_HORIZON_URL` | optional | Horizon REST endpoint. Default: `https://horizon-testnet.stellar.org` |
-| `NEXT_PUBLIC_CONTRACT_ID` | optional | Deployed niffyinsure contract ID for the active network |
-| `NEXT_PUBLIC_IPFS_GATEWAY` | optional | IPFS gateway base URL. Default: `https://ipfs.io/ipfs` |
-| `NEXT_PUBLIC_NETWORK` | optional | Active Stellar network: `testnet` or `public`. Default: `testnet` |
-| `NEXT_PUBLIC_CAPTCHA_SITE_KEY` | optional | Public CAPTCHA site key |
-| `NEXT_PUBLIC_CAPTCHA_PROVIDER` | optional | CAPTCHA provider: `turnstile` or `hcaptcha`. Default: `turnstile` |
-| `NEXT_PUBLIC_RAMP_ENABLED` | optional | Enable the on-ramp button. Default: `false` |
-| `NEXT_PUBLIC_RAMP_ANALYTICS` | optional | Emit anonymized ramp click analytics. Default: `false` |
-
----
-
-## Local dev setup check
-
-Validate both `.env` files before starting the dev server:
-
-```bash
-npx ts-node scripts/check-env-local.ts
-# or
-make check-env
-```
-
-This script checks that all required variables are present and non-empty in `backend/.env` and `frontend/.env.local`.
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `EVIDENCE_MAX_BYTES` | `optional` | Maximum allowed claim evidence file size in bytes. Defaults to 10 MB. | `10485760` |
+| `EVIDENCE_UPLOAD_RATE_LIMIT` | `optional` | Maximum evidence uploads per wallet per rate-limit window. | `5` |
+| `EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS` | `optional` | Evidence upload rate-limit window in seconds. | `3600` |

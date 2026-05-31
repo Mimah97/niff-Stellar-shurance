@@ -74,14 +74,14 @@ describe('IndexerService', () => {
     };
 
     const tx = {
-      rawEvent: { upsert: jest.fn() },
+      rawEvent: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
       ledgerCursor: {
         findUnique: jest.fn().mockResolvedValue({ lastProcessedLedger: 10 }),
         upsert: jest.fn(),
       },
       policy: { upsert: jest.fn() },
       claim: { upsert: jest.fn(), update: jest.fn() },
-      vote: { upsert: jest.fn() },
+      vote: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
     };
 
     const prisma = {
@@ -113,6 +113,54 @@ describe('IndexerService', () => {
         update: expect.objectContaining({ lastProcessedLedger: 42 }),
       }),
     );
+  });
+
+  it('invalidates claim summary cache after vote ingestion', async () => {
+    const tx = {
+      vote: { upsert: jest.fn().mockResolvedValue(undefined) },
+      claim: { update: jest.fn().mockResolvedValue(undefined) },
+    };
+    const claimEvents = { publish: jest.fn().mockResolvedValue(undefined) };
+    const claimSummaryCache = { invalidateClaim: jest.fn().mockResolvedValue(undefined) };
+    const votePubSub = { publishVote: jest.fn().mockResolvedValue(undefined) };
+    const service = new IndexerService(
+      {} as never,
+      {} as never,
+      makeConfig(),
+      undefined,
+      claimEvents as never,
+      undefined,
+      claimSummaryCache as never,
+      votePubSub as never,
+    );
+
+    await (service as unknown as {
+      handleVoteCast: (
+        tx: typeof tx,
+        topics: unknown[],
+        data: Record<string, unknown>,
+        event: { ledger: number; txHash: string },
+      ) => Promise<void>;
+    }).handleVoteCast(
+      tx,
+      ['vote', 42, 'GVOTER'],
+      { vote: 'Approve', approve_votes: 2, reject_votes: 1 },
+      { ledger: 123, txHash: 'vote-tx' },
+    );
+
+    expect(tx.vote.upsert).toHaveBeenCalled();
+    expect(tx.claim.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 42 } }),
+    );
+    expect(claimSummaryCache.invalidateClaim).toHaveBeenCalledWith(42);
+    expect(votePubSub.publishVote).toHaveBeenCalledWith({
+      claimId: 42,
+      voter: 'GVOTER',
+      vote: 'yes',
+      yesVotes: 2,
+      noVotes: 1,
+      totalVotes: 3,
+    });
   });
 
   // ── Gap alert deduplication tests ────────────────────────────────────────
@@ -362,7 +410,7 @@ describe('IndexerService.processUntilCaughtUp — progress tracking', () => {
         findUnique: jest.fn().mockResolvedValue({ lastProcessedLedger: 901 }),
         upsert: jest.fn(),
       },
-      rawEvent: { upsert: jest.fn() },
+      rawEvent: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
     };
     // ledgerCursor.findUnique: first call for ensureCursor in processUntilCaughtUp,
     // then once per processNextBatchForNetwork call (2 batches), then once per progress update (2)

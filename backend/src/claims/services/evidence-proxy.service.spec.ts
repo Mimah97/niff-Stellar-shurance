@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { EvidenceProxyService } from './evidence-proxy.service';
 
 const CLAIMANT = 'GCLAIMANT000000000000000000000000000000000000000000000000';
@@ -5,12 +6,20 @@ const VOTER = 'GVOTER0000000000000000000000000000000000000000000000000000';
 const STRANGER = 'GSTRANGER00000000000000000000000000000000000000000000000000';
 const CID = 'QmTestCid123456789';
 
-function makeClaim(overrides: Partial<{ creatorAddress: string; imageUrls: string[]; votes: { voterAddress: string }[] }> = {}) {
+function makeClaim(overrides: Partial<{
+  creatorAddress: string;
+  imageUrls: string[];
+  votes: { voterAddress: string }[];
+  txHash: string | null;
+  eventIndex: number | null;
+}> = {}) {
   return {
     id: 1,
     creatorAddress: CLAIMANT,
     imageUrls: [`ipfs://${CID}`],
     votes: [{ voterAddress: VOTER }],
+    txHash: '0xdeadbeef',
+    eventIndex: 0,
     ...overrides,
   };
 }
@@ -19,6 +28,9 @@ function makeService(claimOverride?: ReturnType<typeof makeClaim> | null) {
   const prisma = {
     claim: {
       findUnique: jest.fn().mockResolvedValue(claimOverride !== undefined ? claimOverride : makeClaim()),
+    },
+    rawEvent: {
+      findUnique: jest.fn(),
     },
   };
   const audit = { write: jest.fn().mockResolvedValue(undefined) };
@@ -51,19 +63,20 @@ const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
 function mockFetchOk(contentType = 'image/png') {
-  const chunks = [new Uint8Array([1, 2, 3])];
-  let i = 0;
+  const content = Buffer.from([1, 2, 3]);
   mockFetch.mockResolvedValue({
     ok: true,
     headers: { get: () => contentType },
-    body: {
-      getReader: () => ({
-        read: jest.fn().mockImplementation(async () => {
-          if (i < chunks.length) return { done: false, value: chunks[i++] };
-          return { done: true, value: undefined };
-        }),
-      }),
-    },
+    arrayBuffer: jest.fn().mockResolvedValue(content),
+  });
+  return content;
+}
+
+function mockFetchForContent(content: Buffer, contentType = 'image/png') {
+  mockFetch.mockResolvedValue({
+    ok: true,
+    headers: { get: () => contentType },
+    arrayBuffer: jest.fn().mockResolvedValue(content),
   });
 }
 
@@ -71,8 +84,11 @@ describe('EvidenceProxyService', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('streams evidence to claimant with correct headers', async () => {
-    const { service } = makeService();
-    mockFetchOk('image/png');
+    const { service, prisma } = makeService();
+    const content = mockFetchOk('image/png');
+    prisma.rawEvent.findUnique.mockResolvedValue({
+      data: { evidence_hashes: [createHash('sha256').update(content).digest('hex')] },
+    });
     const res = makeRes();
 
     await service.stream(1, 0, CLAIMANT, res as never);
@@ -86,8 +102,11 @@ describe('EvidenceProxyService', () => {
   });
 
   it('streams evidence to active voter', async () => {
-    const { service } = makeService();
-    mockFetchOk();
+    const { service, prisma } = makeService();
+    const content = mockFetchOk();
+    prisma.rawEvent.findUnique.mockResolvedValue({
+      data: { evidence_hashes: [createHash('sha256').update(content).digest('hex')] },
+    });
     const res = makeRes();
 
     await service.stream(1, 0, VOTER, res as never);
@@ -120,8 +139,11 @@ describe('EvidenceProxyService', () => {
   });
 
   it('writes audit log on successful download', async () => {
-    const { service, audit } = makeService();
-    mockFetchOk();
+    const { service, audit, prisma } = makeService();
+    const content = mockFetchOk();
+    prisma.rawEvent.findUnique.mockResolvedValue({
+      data: { evidence_hashes: [createHash('sha256').update(content).digest('hex')] },
+    });
     const res = makeRes();
 
     await service.stream(1, 0, CLAIMANT, res as never);
@@ -129,5 +151,50 @@ describe('EvidenceProxyService', () => {
     expect(audit.write).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'evidence_download', actor: CLAIMANT }),
     );
+  });
+
+  it('returns verified=true when fetched bytes match the on-chain commitment', async () => {
+    const { service, prisma } = makeService();
+    const content = Buffer.from('match me');
+    mockFetchForContent(content);
+    prisma.rawEvent.findUnique.mockResolvedValue({
+      data: { evidence_hashes: [createHash('sha256').update(content).digest('hex')] },
+    });
+
+    const result = await service.fetch(1, 0, CLAIMANT);
+
+    expect(result.verified).toBe(true);
+    expect(result.hashMismatch).toBe(false);
+  });
+
+  it('flags hashMismatch and logs a security event when the hash differs', async () => {
+    const { service, prisma, audit } = makeService();
+    const content = Buffer.from('mismatch me');
+    mockFetchForContent(content);
+    prisma.rawEvent.findUnique.mockResolvedValue({
+      data: { evidence_hashes: ['0'.repeat(64)] },
+    });
+
+    const result = await service.fetch(1, 0, CLAIMANT);
+
+    expect(result.verified).toBe(false);
+    expect(result.hashMismatch).toBe(true);
+    expect(audit.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'evidence_hash_mismatch',
+        actor: CLAIMANT,
+      }),
+    );
+  });
+
+  it('returns verified=false without error when the on-chain hash is missing', async () => {
+    const { service, prisma } = makeService();
+    mockFetchForContent(Buffer.from('no hash'));
+    prisma.rawEvent.findUnique.mockResolvedValue(null);
+
+    const result = await service.fetch(1, 0, CLAIMANT);
+
+    expect(result.verified).toBe(false);
+    expect(result.hashMismatch).toBe(false);
   });
 });

@@ -717,6 +717,54 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async tryEmitClaimStatusOverrideEvent(args: {
+    sourceAccount?: string;
+    claimId: number;
+    oldStatus: string;
+    newStatus: string;
+    reason: string;
+    actor: string;
+  }): Promise<void> {
+    await this.trackRpc('emit_claim_override_event', async () => {
+      const sourceAccount =
+        args.sourceAccount ??
+        this.configService.get<string>('SOROBAN_ADMIN_PUBLIC_KEY') ??
+        this.configService.get<string>('ADMIN_PUBLIC_KEY');
+      if (!sourceAccount) {
+        throw new BadRequestException({
+          code: 'ADMIN_SOURCE_ACCOUNT_REQUIRED',
+          message: 'No admin source account configured for Soroban override event emission.',
+        });
+      }
+
+      const server = this.makeServer();
+      const account = await this.loadAccount(server, sourceAccount);
+      const contract = new Contract(this.contractId);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          contract.call(
+            'admin_emit_claim_status_override',
+            nativeToScVal(args.claimId, { type: 'u64' }),
+            nativeToScVal(args.oldStatus, { type: 'string' }),
+            nativeToScVal(args.newStatus, { type: 'string' }),
+            nativeToScVal(args.reason, { type: 'string' }),
+            nativeToScVal(args.actor, { type: 'string' }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const simulation = await server.simulateTransaction(tx);
+      if (Api.isSimulationError(simulation)) {
+        const err = simulation as SorobanRpc.Api.SimulateTransactionErrorResponse;
+        throw new BadRequestException({ code: 'OVERRIDE_EVENT_SIMULATION_FAILED', message: err.error });
+      }
+    });
+  }
+
   /**
    * Simulate `get_policies_batch(Vec<PolicyLookupKey>)` → `Vec<Option<Policy>>`.
    * One RPC round-trip for dashboard bulk loads; order matches `keys`.

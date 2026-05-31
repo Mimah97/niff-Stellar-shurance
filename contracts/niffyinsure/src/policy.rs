@@ -30,8 +30,8 @@ pub enum PolicyError {
     LedgerOverflow = 105,
     /// Policy struct failed internal validation.
     PolicyValidation = 106,
-    /// Deductible missing, negative, or greater than coverage cap.
-    InvalidDeductible = 120,
+    /// Invalid or empty metadata URI.
+    InvalidMetadataUri = 121,
     /// Caller is not authorized.
     Unauthorized = 107,
     /// Age out of range (1..=120).
@@ -58,8 +58,8 @@ pub enum PolicyError {
     Expired = 118,
     /// Supplied `expected_nonce` does not match the holder's current on-chain nonce.
     NonceMismatch = 119,
-    /// Treasury solvency ratio is below the admin-configured threshold.
-    InsufficientSolvency = 121,
+    /// Region code not found in the admin-managed region registry, or region is deactivated.
+    InvalidRegion = 121,
 }
 
 #[contracttype]
@@ -111,6 +111,18 @@ pub struct BeneficiaryUpdated {
     pub new_beneficiary: Option<Address>,
 }
 
+/// Emitted when the policy metadata URI is updated.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyMetadataUpdated {
+    #[topic]
+    pub holder: Address,
+    #[topic]
+    pub policy_id: u32,
+    pub old_uri: String,
+    pub new_uri: String,
+}
+
 /// Event emitted by `renew_policy`.
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -121,6 +133,10 @@ pub struct PolicyRenewed {
     pub policy_id: u32,
     pub premium: i128,
     pub new_end_ledger: u32,
+    pub old_coverage_type: CoverageType,
+    pub new_coverage_type: CoverageType,
+    pub old_coverage: i128,
+    pub new_coverage: i128,
 }
 
 /// Emitted at most once per `(holder, policy_id, end_ledger)` term when expiry is detected.
@@ -327,14 +343,38 @@ pub fn initiate_policy(
     beneficiary: Option<Address>,
     deductible: Option<i128>,
     expected_nonce: Option<u64>,
+    metadata_uri: String,
 ) -> Result<Policy, PolicyError> {
     // Check granular pause: policy binding should be blocked if bind_paused
     storage::assert_bind_not_paused(env);
+
+    // Policy type registry check: if the registry is enabled, the requested type
+    // must be registered and active. If the registry has never been used, all types
+    // are allowed for backward compatibility with pre-registry deployments.
+    if storage::is_policy_type_registry_enabled(env)
+        && !storage::is_policy_type_active(env, &policy_type)
+    {
+        return Err(PolicyError::AssetNotAllowed);
+    }
 
     // Asset allowlist check — before auth so callers get a clear error.
     if !storage::is_allowed_asset(env, &asset) {
         return Err(PolicyError::AssetNotAllowed);
     }
+
+    // Region registry validation: if the registry is non-empty, the supplied
+    // region_code must exist and be active.
+    let region_registry = storage::get_region_registry(env);
+    let region_risk_multiplier = if region_registry.len() == 0 {
+        premium::SCALE
+    } else {
+        let code = region_code.ok_or(PolicyError::InvalidRegion)?;
+        let config = region_registry.get(code).ok_or(PolicyError::InvalidRegion)?;
+        if !config.active {
+            return Err(PolicyError::InvalidRegion);
+        }
+        config.risk_multiplier
+    };
 
     holder.require_auth();
 
@@ -378,7 +418,13 @@ pub fn initiate_policy(
                 }
                 _ => PolicyError::PremiumOverflow,
             })?;
-    let premium_amount = quote.total_premium;
+    let premium_amount = premium::checked_mul_ratio(
+        quote.total_premium,
+        region_risk_multiplier,
+        premium::SCALE,
+        premium::Rounding::Ceil,
+    )
+    .map_err(|_| PolicyError::PremiumOverflow)?;
     if premium_amount <= 0 {
         return Err(PolicyError::InvalidPremium);
     }
@@ -437,6 +483,7 @@ pub fn initiate_policy(
         termination_reason: crate::types::TerminationReason::None,
         terminated_by_admin: false,
         strike_count: 0,
+        metadata_uri,
     };
 
     validate::check_policy(&policy).map_err(|_| PolicyError::PolicyValidation)?;
@@ -519,6 +566,39 @@ pub fn set_beneficiary(
     Ok(())
 }
 
+/// Admin-only: update the policy metadata URI. Must be non-empty.
+pub fn update_policy_metadata_uri(
+    env: &Env,
+    holder: Address,
+    policy_id: u32,
+    new_uri: String,
+) -> Result<(), PolicyError> {
+    // Validate new_uri is non-empty
+    if new_uri.is_empty() {
+        return Err(PolicyError::InvalidMetadataUri);
+    }
+
+    let mut policy = storage::get_policy(env, &holder, policy_id).ok_or(PolicyError::NotFound)?;
+
+    let old_uri = policy.metadata_uri.clone();
+    if old_uri == new_uri {
+        return Ok(());
+    }
+
+    policy.metadata_uri = new_uri.clone();
+    storage::set_policy(env, &holder, policy_id, &policy);
+
+    PolicyMetadataUpdated {
+        holder: holder.clone(),
+        policy_id,
+        old_uri,
+        new_uri,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
 // ── Grace period admin setter ─────────────────────────────────────────────────
 
 #[contractevent(topics = ["niffyinsure", "grace_period_updated"])]
@@ -529,7 +609,7 @@ pub struct GracePeriodUpdated {
 }
 
 pub fn set_grace_period_ledgers(env: &Env, ledgers: u32) -> Result<(), RenewalError> {
-    crate::admin::require_admin(env);
+    let admin = crate::admin::require_admin(env);
     if !ledger::is_valid_grace_period_ledgers(ledgers) {
         return Err(RenewalError::GracePeriodOutOfBounds);
     }
@@ -540,6 +620,7 @@ pub fn set_grace_period_ledgers(env: &Env, ledgers: u32) -> Result<(), RenewalEr
         new_ledgers: ledgers,
     }
     .publish(env);
+    crate::admin::emit_admin_action(env, &admin, "set_grace_period_ledgers");
     Ok(())
 }
 
@@ -625,6 +706,8 @@ pub fn renew_policy(
     age_band: AgeBand,
     coverage_type: CoverageType,
     safety_score: u32,
+    new_coverage_tier: Option<CoverageType>,
+    new_coverage_amount: Option<i128>,
 ) -> Result<crate::types::RenewPolicyOutcome, PolicyError> {
     storage::assert_bind_not_paused(env);
     holder.require_auth();
@@ -667,10 +750,18 @@ pub fn renew_policy(
         return Err(PolicyError::AssetNotAllowed);
     }
 
+    let effective_coverage_type = new_coverage_tier.unwrap_or_else(|| coverage_type.clone());
+    let effective_coverage_amount = new_coverage_amount.unwrap_or(policy.coverage);
+    if coverage_tier_rank(&effective_coverage_type) < coverage_tier_rank(&coverage_type)
+        || effective_coverage_amount < policy.coverage
+    {
+        return Err(PolicyError::InvalidCoverage);
+    }
+
     let input = RiskInput {
         region: policy.region.clone(),
         age_band: age_band.clone(),
-        coverage: coverage_type,
+        coverage: effective_coverage_type.clone(),
         safety_score,
     };
 
@@ -696,7 +787,9 @@ pub fn renew_policy(
         .checked_add(ledger::POLICY_DURATION_LEDGERS)
         .ok_or(PolicyError::LedgerOverflow)?;
 
+    let old_coverage = policy.coverage;
     policy.premium = premium_amount;
+    policy.coverage = effective_coverage_amount;
     policy.end_ledger = new_end;
 
     validate::check_policy(&policy).map_err(|_| PolicyError::PolicyValidation)?;
@@ -709,8 +802,20 @@ pub fn renew_policy(
         policy_id,
         premium: premium_amount,
         new_end_ledger: new_end,
+        old_coverage_type: coverage_type,
+        new_coverage_type: effective_coverage_type,
+        old_coverage,
+        new_coverage: effective_coverage_amount,
     }
     .publish(env);
 
     Ok(crate::types::RenewPolicyOutcome::Renewed(policy))
+}
+
+fn coverage_tier_rank(tier: &CoverageType) -> u32 {
+    match tier {
+        CoverageType::Basic => 0,
+        CoverageType::Standard => 1,
+        CoverageType::Premium => 2,
+    }
 }

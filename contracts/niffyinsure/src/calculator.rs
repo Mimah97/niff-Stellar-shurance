@@ -70,6 +70,52 @@ pub struct CalcResult {
 pub trait PremiumCalculatorTrait {
     fn compute(env: Env, input: CalcInput) -> Result<CalcResult, soroban_sdk::Error>;
     fn get_version(env: Env) -> u32;
+    fn version(env: Env) -> soroban_sdk::String;
+}
+
+// ── Calculator versioning ─────────────────────────────────────────────────────
+
+/// Storage key for the expected calculator contract version.
+/// When set, every cross-contract call asserts the calculator's `get_version()`
+/// matches this value before proceeding.
+const CALC_EXPECTED_VERSION_KEY: &str = "calc_exp_ver";
+
+/// Store the expected calculator version in instance storage.
+pub fn set_expected_calc_version(env: &Env, version: u32) {
+    env.storage()
+        .instance()
+        .set(&soroban_sdk::Symbol::new(env, CALC_EXPECTED_VERSION_KEY), &version);
+}
+
+/// Read the expected calculator version (None = version check disabled).
+pub fn get_expected_calc_version(env: &Env) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&soroban_sdk::Symbol::new(env, CALC_EXPECTED_VERSION_KEY))
+}
+
+/// Remove the expected calculator version (disables version check).
+pub fn clear_expected_calc_version(env: &Env) {
+    env.storage()
+        .instance()
+        .remove(&soroban_sdk::Symbol::new(env, CALC_EXPECTED_VERSION_KEY));
+}
+
+/// Admin entrypoint: atomically update the calculator contract address and expected version.
+/// Both are written together or neither is written (Soroban transactions are atomic).
+///
+/// Pass `expected_version = 0` to disable version checking.
+pub fn set_calculator_with_version(
+    env: &Env,
+    calculator: &Address,
+    expected_version: u32,
+) {
+    storage::set_calc_address(env, calculator);
+    if expected_version == 0 {
+        clear_expected_calc_version(env);
+    } else {
+        set_expected_calc_version(env, expected_version);
+    }
 }
 
 // ── Public helper ─────────────────────────────────────────────────────────────
@@ -110,6 +156,16 @@ fn call_external(
     quote_ttl: u32,
 ) -> Result<PremiumQuote, Error> {
     let client = PremiumCalculatorClient::new(env, calc_addr);
+
+    // Version guard: if an expected version is configured, assert it matches
+    // the calculator's reported version before calling compute.
+    if let Some(expected_ver) = get_expected_calc_version(env) {
+        let actual_ver = client.get_version();
+        if actual_ver != expected_ver {
+            return Err(Error::CalculatorVersionMismatch);
+        }
+    }
+
     let calc_input = to_calc_input(input, base_amount);
 
     // try_compute returns:

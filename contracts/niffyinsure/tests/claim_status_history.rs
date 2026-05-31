@@ -12,7 +12,7 @@ use niffyinsure::{
     NiffyInsureClient,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     token, Address, Env, String,
 };
 
@@ -52,6 +52,12 @@ fn seed_voter(client: &NiffyInsureClient<'_>, holder: &Address) {
     client.test_seed_policy(holder, &1u32, &1_000_000i128, &10_000u32);
 }
 
+fn claim_status_changed_count(env: &Env) -> usize {
+    soroban_sdk::testutils::arbitrary::std::format!("{:?}", env.events().all())
+        .matches("claim_status_changed")
+        .count()
+}
+
 #[test]
 fn status_history_order_matches_transitions_and_get_claim_history() {
     let (env, client, _admin, token) = setup();
@@ -77,12 +83,14 @@ fn status_history_order_matches_transitions_and_get_claim_history() {
             beneficiary: None,
             deductible: None,
             expected_nonce: None,
+            region_code: None,
         },
     );
 
     let details = String::from_str(&env, "timeline test");
     let ev = common::empty_evidence(&env);
     let claim_id = client.file_claim(&holder, &policy.policy_id, &50_000, &details, &ev, &None);
+    assert_eq!(claim_status_changed_count(&env), 1);
 
     let claim = client.get_claim(&claim_id);
     assert_eq!(claim.status_history.len(), 1u32);
@@ -94,6 +102,7 @@ fn status_history_order_matches_transitions_and_get_claim_history() {
 
     client.vote_on_claim(&voter1, &claim_id, &VoteOption::Approve);
     client.vote_on_claim(&voter2, &claim_id, &VoteOption::Approve);
+    assert_eq!(claim_status_changed_count(&env), 2);
 
     let claim = client.get_claim(&claim_id);
     assert_eq!(claim.status, ClaimStatus::Approved);
@@ -108,6 +117,7 @@ fn status_history_order_matches_transitions_and_get_claim_history() {
     );
 
     client.process_claim(&claim_id);
+    assert_eq!(claim_status_changed_count(&env), 3);
 
     let claim = client.get_claim(&claim_id);
     assert_eq!(claim.status, ClaimStatus::Paid);
@@ -158,6 +168,7 @@ fn status_history_finalize_reject_sequence() {
             beneficiary: None,
             deductible: None,
             expected_nonce: None,
+            region_code: None,
         },
     );
 
@@ -167,6 +178,7 @@ fn status_history_finalize_reject_sequence() {
     let details = String::from_str(&env, "reject path");
     let ev = common::empty_evidence(&env);
     let claim_id = client.file_claim(&holder, &policy.policy_id, &50_000, &details, &ev, &None);
+    assert_eq!(claim_status_changed_count(&env), 1);
 
     // Split vote — quorum not met until deadline
     client.vote_on_claim(&voter1, &claim_id, &VoteOption::Approve);
@@ -176,6 +188,7 @@ fn status_history_finalize_reject_sequence() {
     });
 
     client.finalize_claim(&claim_id);
+    assert_eq!(claim_status_changed_count(&env), 2);
 
     let claim = client.get_claim(&claim_id);
     assert_eq!(claim.status, ClaimStatus::Rejected);
@@ -221,6 +234,7 @@ fn status_history_cap_drops_oldest_without_reverting_transition() {
             beneficiary: None,
             deductible: None,
             expected_nonce: None,
+            region_code: None,
         },
     );
 
@@ -271,6 +285,7 @@ fn status_history_withdraw_appends_withdrawn_entry() {
             beneficiary: None,
             deductible: None,
             expected_nonce: None,
+            region_code: None,
         },
     );
 

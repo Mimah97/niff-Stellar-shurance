@@ -66,7 +66,7 @@
 // or deadline-plurality approval, which is controlled by the DAO snapshot, not
 // the admin. The admin cannot flip a `Rejected` claim to `Approved`.
 use crate::{
-    ledger, storage,
+    events, ledger, storage,
     types::{
         Claim, ClaimEvidenceEntry, ClaimProcessed, ClaimStatus, ClaimStatusHistoryEntry,
         TerminationReason, VoteOption, CLAIM_STATUS_HISTORY_MAX, STRIKE_DEACTIVATION_THRESHOLD,
@@ -194,6 +194,15 @@ pub struct PayoutTimedOut {
     pub at_ledger: u32,
 }
 
+/// Emitted when admin disputes an approved claim during the dispute window.
+#[contractevent(topics = ["niffyinsure", "claim_disputed"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimDisputed {
+    #[topic]
+    pub claim_id: u64,
+    pub at_ledger: u32,
+}
+
 /// Emitted every time a rejection increments the policy's strike counter.
 /// Indexers should use this event to notify holders of accumulating strikes
 /// before the threshold triggers deactivation.
@@ -300,6 +309,16 @@ pub fn file_claim(
     crate::validate::check_claim_fields(env, amount, policy.coverage, details, evidence)?;
     crate::rolling_claim_cap::check_file_claim(env, holder, policy_id, amount, now)?;
 
+    // Issue #587: validate against asset-specific min/max bounds
+    if let Some(asset_config) = storage::get_allowed_asset_config(env, &policy.asset) {
+        if amount < asset_config.min_claim_amount {
+            return Err(Error::ClaimBelowMinAmount);
+        }
+        if amount > asset_config.max_claim_amount {
+            return Err(Error::ClaimAboveMaxAmount);
+        }
+    }
+
     let deductible_snapshot = policy.deductible.unwrap_or(0);
 
     let duration = storage::get_voting_duration_ledgers(env);
@@ -333,6 +352,7 @@ pub fn file_claim(
         appeal_approve_votes: 0,
         appeal_reject_votes: 0,
         status_history,
+        dispute_deadline_ledger: 0,
     };
 
     storage::set_claim(env, &claim);
@@ -355,6 +375,12 @@ pub fn file_claim(
         evidence_hashes,
     }
     .publish(env);
+    events::emit_claim_status_changed(
+        env,
+        claim_id,
+        ClaimStatus::Pending,
+        ClaimStatus::Processing,
+    );
 
     Ok(claim_id)
 }
@@ -390,6 +416,7 @@ pub fn withdraw_claim(env: &Env, claimant: &Address, claim_id: u64) -> Result<()
     }
 
     let now = env.ledger().sequence();
+    let old_status = claim.status.clone();
     claim.status = ClaimStatus::Withdrawn;
     push_status_transition(&mut claim.status_history, ClaimStatus::Withdrawn, now);
 
@@ -409,6 +436,7 @@ pub fn withdraw_claim(env: &Env, claimant: &Address, claim_id: u64) -> Result<()
         at_ledger: now,
     }
     .publish(env);
+    events::emit_claim_status_changed(env, claim_id, old_status, ClaimStatus::Withdrawn);
 
     Ok(())
 }
@@ -466,14 +494,24 @@ pub fn vote_on_claim(
     let status_before = claim.status.clone();
     let vote_weight = storage::delegated_vote_weight(env, claim_id, voter, now)?;
 
+    // Compute vote weight: proportional to active policy count when governance token
+    // is enabled (capped by max_weight_cap), or 1 when disabled.
+    let vote_weight: u32 = if crate::governance_token::governance_token_effective_enabled(env) {
+        let balance = storage::get_holder_active_policy_count(env, voter) as i128;
+        let cap = storage::get_max_weight_cap(env);
+        balance.min(cap).max(1) as u32
+    } else {
+        1
+    };
+
     match vote {
-        VoteOption::Approve => claim.approve_votes += vote_weight,
-        VoteOption::Reject => claim.reject_votes += vote_weight,
+        VoteOption::Approve => claim.approve_votes = claim.approve_votes.saturating_add(vote_weight),
+        VoteOption::Reject => claim.reject_votes = claim.reject_votes.saturating_add(vote_weight),
     }
 
     let eligible = claim.eligible_voter_count;
     let cast = claim.approve_votes + claim.reject_votes;
-    let quorum_bps = storage::get_claim_quorum_bps(env, claim_id);
+    let quorum_bps = effective_quorum_bps(env, claim_id);
     if let Some(res) = resolve_plurality_if_quorum_met(
         claim.approve_votes,
         claim.reject_votes,
@@ -494,6 +532,12 @@ pub fn vote_on_claim(
             claim.payout_deadline_ledger = now.saturating_add(ledger::PAYOUT_TIMEOUT_LEDGERS);
         }
         push_status_transition(&mut claim.status_history, claim.status.clone(), now);
+        events::emit_claim_status_changed(
+            env,
+            claim_id,
+            status_before.clone(),
+            claim.status.clone(),
+        );
     }
 
     let newly_rejected = claim.status == ClaimStatus::Rejected;
@@ -508,6 +552,11 @@ pub fn vote_on_claim(
 
     let status = claim.status.clone();
     storage::set_claim(env, &claim);
+
+    // Record resolution ledger for per-policy cooldown enforcement.
+    if claim.status == ClaimStatus::Approved || claim.status == ClaimStatus::Rejected {
+        storage::set_last_claim_resolved_ledger(env, &claim.claimant, claim.policy_id, now);
+    }
 
     // Apply rejection side-effects after the claim record is persisted.
     // on_reject emits ClaimRejected, StrikeIncremented, and (if threshold
@@ -553,7 +602,7 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
 
     let eligible = claim.eligible_voter_count;
     let cast = claim.approve_votes + claim.reject_votes;
-    let quorum_bps = storage::get_claim_quorum_bps(env, claim_id);
+    let quorum_bps = effective_quorum_bps(env, claim_id);
 
     if participation_quorum_met(cast, eligible, quorum_bps) {
         if claim.approve_votes > claim.reject_votes {
@@ -572,8 +621,16 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
     if claim.status != status_before {
         if claim.status == ClaimStatus::Approved && claim.payout_deadline_ledger == 0 {
             claim.payout_deadline_ledger = now.saturating_add(ledger::PAYOUT_TIMEOUT_LEDGERS);
+            // Set dispute deadline after approval
+            claim.dispute_deadline_ledger = now.saturating_add(ledger::DEFAULT_DISPUTE_WINDOW_LEDGERS);
         }
         push_status_transition(&mut claim.status_history, claim.status.clone(), now);
+        events::emit_claim_status_changed(
+            env,
+            claim_id,
+            status_before.clone(),
+            claim.status.clone(),
+        );
     }
 
     let newly_rejected = claim.status == ClaimStatus::Rejected;
@@ -586,6 +643,11 @@ fn finalize_claim_inner(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> 
 
     let status = claim.status.clone();
     storage::set_claim(env, &claim);
+
+    // Record resolution ledger for per-policy cooldown enforcement.
+    if claim.status == ClaimStatus::Approved || claim.status == ClaimStatus::Rejected {
+        storage::set_last_claim_resolved_ledger(env, &claim.claimant, claim.policy_id, now);
+    }
 
     // Apply rejection side-effects after the claim record is persisted.
     if newly_rejected {
@@ -601,7 +663,107 @@ pub fn finalize_claim(env: &Env, claim_id: u64) -> Result<ClaimStatus, Error> {
     finalize_claim_inner(env, claim_id)
 }
 
-/// Permissionless keeper: same outcome as [`finalize_claim`] when voting has ended, but returns
+// ── Batch finalization constants ──────────────────────────────────────────────
+
+/// Maximum number of claim IDs accepted in a single `finalize_expired_batch` call.
+///
+/// Sized to stay within Soroban's default instruction budget for a single transaction.
+/// Each claim requires at least one persistent read + write; 20 matches the existing
+/// `PAGE_SIZE_MAX` pagination cap used elsewhere in this contract.
+///
+/// Callers that need to process more claims must split into multiple transactions.
+pub const BATCH_FINALIZE_MAX: u32 = 20;
+
+// ── BatchFinalized event ──────────────────────────────────────────────────────
+
+/// Summary event emitted once per `finalize_expired_batch` call after all eligible
+/// claims have been processed.
+///
+/// topics: ("niffyinsure", "batch_finalized")
+/// payload: { processed, skipped, at_ledger }
+///
+/// `processed` = number of claims that transitioned out of `Processing`.
+/// `skipped`   = number of claim IDs that were already terminal or not found.
+#[contractevent(topics = ["niffyinsure", "batch_finalized"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchFinalized {
+    pub processed: u32,
+    pub skipped: u32,
+    pub at_ledger: u32,
+}
+
+/// Permissionless keeper: finalize multiple expired claims in one transaction.
+///
+/// For each `claim_id` in `claim_ids`:
+/// - If the claim is not found or already terminal → skip (no revert).
+/// - If the voting deadline has not passed → skip (no revert).
+/// - Otherwise → finalize via the same logic as `process_deadline`.
+///
+/// Reverts before any processing if `claim_ids.len() > BATCH_FINALIZE_MAX`.
+/// Reverts if `claims_paused` is set.
+///
+/// Emits individual finalization events per claim (via `finalize_claim_inner`)
+/// and one `BatchFinalized` summary event at the end.
+pub fn finalize_expired_batch(
+    env: &Env,
+    claim_ids: &soroban_sdk::Vec<u64>,
+) -> Result<(u32, u32), Error> {
+    if storage::get_pause_flags(env).claims_paused {
+        return Err(Error::CalculatorPaused);
+    }
+    if claim_ids.len() > BATCH_FINALIZE_MAX {
+        return Err(Error::PolicyBatchTooLarge);
+    }
+
+    let now = env.ledger().sequence();
+    let mut processed: u32 = 0;
+    let mut skipped: u32 = 0;
+
+    for i in 0..claim_ids.len() {
+        let claim_id = claim_ids.get(i).unwrap();
+
+        let claim = match storage::get_claim(env, claim_id) {
+            Some(c) => c,
+            None => {
+                skipped += 1;
+                continue;
+            }
+        };
+
+        // Skip already-finalized claims without reverting.
+        if claim.status.is_terminal() {
+            skipped += 1;
+            continue;
+        }
+
+        // Skip claims whose voting window is still open.
+        if !ledger::is_claim_past_voting_deadline(now, claim.voting_deadline_ledger) {
+            skipped += 1;
+            continue;
+        }
+
+        // Only finalize Processing claims (same guard as process_deadline).
+        if claim.status != ClaimStatus::Processing {
+            skipped += 1;
+            continue;
+        }
+
+        // finalize_claim_inner never panics for eligible claims; propagate unexpected errors.
+        finalize_claim_inner(env, claim_id)?;
+        processed += 1;
+    }
+
+    BatchFinalized {
+        processed,
+        skipped,
+        at_ledger: now,
+    }
+    .publish(env);
+
+    Ok((processed, skipped))
+}
+
+/// Permissionless keeper: same outcome as `finalize_claim` when voting has ended, but returns
 /// [`Error::CalculatorPaused`] if `claims_paused` is set instead of panicking.
 ///
 /// Only [`ClaimStatus::Processing`] claims are eligible so keepers cannot advance appeal or other flows.
@@ -672,8 +834,13 @@ pub fn process_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
         return Err(Error::ClaimNotApproved);
     }
 
-    payout(env, &claim)?;
+    // Check dispute deadline: payout cannot execute until dispute window closes
     let now = env.ledger().sequence();
+    if now <= claim.dispute_deadline_ledger {
+        return Err(Error::DisputeWindowActive);
+    }
+
+    payout(env, &claim)?;
     crate::rolling_claim_cap::record_claim_paid(
         env,
         &claim.claimant,
@@ -681,11 +848,13 @@ pub fn process_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
         claim.amount,
         now,
     );
+    let old_status = claim.status.clone();
     claim.status = ClaimStatus::Paid;
     push_status_transition(&mut claim.status_history, ClaimStatus::Paid, now);
     storage::set_open_claim(env, &claim.claimant, claim.policy_id, false);
     storage::remove_claim_rate_limit_prev(env, claim_id);
     storage::set_claim(env, &claim);
+    events::emit_claim_status_changed(env, claim_id, old_status, ClaimStatus::Paid);
     Ok(())
 }
 
@@ -786,6 +955,7 @@ fn on_reject(env: &Env, claim: &Claim) {
 fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
     let policy =
         storage::get_policy(env, &claim.claimant, claim.policy_id).ok_or(Error::PolicyNotFound)?;
+    let now = env.ledger().sequence();
 
     if !storage::is_allowed_asset(env, &policy.asset) {
         return Err(Error::InvalidAsset);
@@ -812,14 +982,23 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         return Err(Error::ClaimAmountZero);
     }
 
-    if !crate::token::check_balance(env, &effective_asset, net) {
-        return Err(Error::InsufficientTreasury);
-    }
-
     let payout_to = policy
         .beneficiary
         .clone()
         .unwrap_or_else(|| policy.holder.clone());
+
+    if payout_to.to_string().starts_with('C') {
+        if !storage::is_allowed_payout_recipient(env, &payout_to) {
+            return Err(Error::PayoutRecipientContractNotAllowlisted);
+        }
+        PayoutRecipientWarning {
+            claim_id: claim.claim_id,
+            recipient: payout_to.clone(),
+            asset: effective_asset.clone(),
+            at_ledger: now,
+        }
+        .publish(env);
+    }
 
     // Emit override event before the transfer so indexers see the asset decision first.
     let override_active = effective_asset != policy.asset;
@@ -833,13 +1012,52 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         );
     }
 
-    crate::token::transfer(
-        env,
-        &effective_asset,
-        &env.current_contract_address(),
-        &payout_to,
-        net,
-    );
+    // Issue #581: attempt primary treasury; if insufficient, draw from reinsurance.
+    let primary_balance = crate::token::get_balance(env, &effective_asset);
+    if primary_balance >= net {
+        crate::token::transfer(
+            env,
+            &effective_asset,
+            &env.current_contract_address(),
+            &payout_to,
+            net,
+        );
+    } else {
+        // Primary treasury insufficient — try reinsurance
+        let reinsurance = storage::get_reinsurance_contract(env)
+            .ok_or(Error::NoReinsuranceConfigured)?;
+
+        let primary_amount = primary_balance.max(0);
+        let reinsurance_amount = net.checked_sub(primary_amount).ok_or(Error::Overflow)?;
+
+        // Transfer whatever is available from primary
+        if primary_amount > 0 {
+            crate::token::transfer(
+                env,
+                &effective_asset,
+                &env.current_contract_address(),
+                &payout_to,
+                primary_amount,
+            );
+        }
+
+        // Draw remainder from reinsurance pool
+        crate::token::transfer_from_reinsurance(
+            env,
+            &effective_asset,
+            &reinsurance,
+            &payout_to,
+            reinsurance_amount,
+        );
+
+        crate::types::ReinsuranceDrawdown {
+            claim_id: claim.claim_id,
+            primary_amount,
+            reinsurance_amount,
+            reinsurance_contract: reinsurance,
+        }
+        .publish(env);
+    }
 
     ClaimProcessed {
         claim_id: claim.claim_id,
@@ -847,6 +1065,34 @@ fn payout(env: &Env, claim: &Claim) -> Result<(), Error> {
         gross_amount: gross,
         deductible,
         amount: net,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Admin-only: dispute an approved claim within the dispute window.
+/// Freezes payout and sets status to Disputed for review.
+pub fn dispute_claim(env: &Env, claim_id: u64) -> Result<(), Error> {
+    let mut claim = storage::get_claim(env, claim_id).ok_or(Error::ClaimNotFound)?;
+
+    if claim.status != ClaimStatus::Approved {
+        return Err(Error::ClaimNotApproved);
+    }
+
+    let now = env.ledger().sequence();
+    if now > claim.dispute_deadline_ledger {
+        return Err(Error::PayoutDeadlineNotReached);
+    }
+
+    let old_status = claim.status.clone();
+    claim.status = ClaimStatus::Disputed;
+    push_status_transition(&mut claim.status_history, ClaimStatus::Disputed, now);
+    storage::set_claim(env, &claim);
+
+    ClaimDisputed {
+        claim_id,
+        at_ledger: now,
     }
     .publish(env);
 
@@ -866,6 +1112,74 @@ pub fn get_claim_history(env: &Env, claim_id: u64) -> Result<Vec<ClaimStatusHist
 
 pub fn set_allowed_asset(env: &Env, asset: &Address, allowed: bool) {
     storage::set_allowed_asset(env, asset, allowed);
+}
+
+// ── Issue #583: Fraud score ───────────────────────────────────────────────────
+
+/// Emitted when a fraud score is set for a claim.
+#[contractevent(topics = ["niffyinsure", "claim_fraud_score_set"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimFraudScoreSet {
+    #[topic]
+    pub claim_id: u64,
+    pub score: u32,
+    pub set_by: Address,
+    pub at_ledger: u32,
+}
+
+/// Admin or oracle: set the fraud score for a claim (0–100).
+/// Requires admin auth or a valid delegation with `can_set_fraud_score`.
+pub fn set_claim_fraud_score(
+    env: &Env,
+    caller: &Address,
+    claim_id: u64,
+    score: u32,
+) -> Result<(), Error> {
+    if score > 100 {
+        return Err(Error::SafetyScoreOutOfRange);
+    }
+    // Verify claim exists
+    let _ = storage::get_claim(env, claim_id).ok_or(Error::ClaimNotFound)?;
+
+    let admin = storage::get_admin(env);
+    if *caller != admin {
+        // Check delegation
+        let delegation = storage::get_delegation(env, caller)
+            .ok_or(Error::DelegationInvalid)?;
+        let now = env.ledger().sequence();
+        if now > delegation.expiry_ledger {
+            return Err(Error::DelegationInvalid);
+        }
+        if !delegation.permissions.can_set_fraud_score {
+            return Err(Error::DelegationPermissionDenied);
+        }
+    }
+
+    storage::set_claim_fraud_score(env, claim_id, score);
+
+    ClaimFraudScoreSet {
+        claim_id,
+        score,
+        set_by: caller.clone(),
+        at_ledger: env.ledger().sequence(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Returns the effective quorum bps for a claim, applying elevated quorum
+/// when a fraud score exceeds the configured threshold.
+pub fn effective_quorum_bps(env: &Env, claim_id: u64) -> u32 {
+    let base = storage::get_claim_quorum_bps(env, claim_id);
+    if let Some(score) = storage::get_claim_fraud_score(env, claim_id) {
+        let threshold = storage::get_fraud_score_threshold(env);
+        if score > threshold {
+            let elevated = storage::get_elevated_quorum_bps(env);
+            return elevated.max(base);
+        }
+    }
+    base
 }
 
 #[cfg(test)]
@@ -998,3 +1312,42 @@ mod appeal_stub_tests {
         assert!(ClaimStatus::AppealRejected.is_terminal());
     }
 }
+// ── add_claim_evidence ───────────────────────────────────────────────────────
+
+/// Claimant-only: replace evidence during the pre-vote window.
+///
+/// Allowed only while the claim is still `Processing` and no ballots have been
+/// cast yet. This lets the claimant correct or expand evidence before voting
+/// begins without mutating any in-flight vote state.
+pub fn add_claim_evidence(
+    env: &Env,
+    claimant: &Address,
+    claim_id: u64,
+    new_evidence: &Vec<ClaimEvidenceEntry>,
+) -> Result<(), Error> {
+    storage::assert_claims_not_paused(env);
+
+    let mut claim = storage::get_claim(env, claim_id).ok_or(Error::ClaimNotFound)?;
+    if claimant != &claim.claimant {
+        return Err(Error::NotEligibleVoter);
+    }
+    if claim.status != ClaimStatus::Processing
+        || claim.approve_votes != 0
+        || claim.reject_votes != 0
+    {
+        return Err(Error::ClaimEvidenceUpdateNotAllowed);
+    }
+
+    validate::check_claim_evidence_update(env, new_evidence)?;
+
+    claim.evidence = new_evidence.clone();
+    storage::set_claim(env, &claim);
+
+    let now = env.ledger().sequence();
+    let mut evidence_hashes: Vec<BytesN<32>> = Vec::new(env);
+    for e in new_evidence.iter() {
+        evidence_hashes.push_back(e.hash.clone());
+    }
+    ClaimEvidenceUpdated {
+        claim_id,
+        policy_id: claim.policy_id,

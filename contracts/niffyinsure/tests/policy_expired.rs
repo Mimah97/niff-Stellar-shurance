@@ -11,7 +11,7 @@ use niffyinsure::{
     NiffyInsureClient, PolicyError,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     token, Address, Env, InvokeError,
 };
 
@@ -155,6 +155,8 @@ fn renew_when_expired_records_notice_once() {
         &AgeBand::Adult,
         &CoverageType::Standard,
         &80u32,
+        &None,
+        &None,
     ));
     assert_eq!(
         client.get_pol_exp_evt_end_ledger(&holder, &1u32),
@@ -167,6 +169,8 @@ fn renew_when_expired_records_notice_once() {
         &AgeBand::Adult,
         &CoverageType::Standard,
         &80u32,
+        &None,
+        &None,
     ));
     assert_eq!(
         client.get_pol_exp_evt_end_ledger(&holder, &1u32),
@@ -198,6 +202,8 @@ fn renew_succeeds_in_window_and_new_term_can_expire() {
         &AgeBand::Adult,
         &CoverageType::Standard,
         &80u32,
+        &None,
+        &None,
     ) {
         RenewPolicyOutcome::Renewed(p) => p,
         RenewPolicyOutcome::Lapsed => panic!("expected renewed"),
@@ -241,8 +247,81 @@ fn renew_rejects_when_open_claim() {
             &AgeBand::Adult,
             &CoverageType::Standard,
             &80u32,
+            &None,
+            &None,
         ),
         "OpenClaimBlocksRenewal",
+    );
+}
+
+#[test]
+fn renew_with_upgrade_applies_new_terms_and_full_premium() {
+    let (env, client, _admin, token) = setup();
+    let holder = Address::generate(&env);
+    client.test_seed_policy(&holder, &1u32, &1_000_000i128, &2_000u32);
+
+    token::StellarAssetClient::new(&env, &token).mint(&holder, &500_000_000i128);
+    token::Client::new(&env, &token).approve(
+        &holder,
+        &client.address,
+        &500_000_000i128,
+        &(5_000u32),
+    );
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 1_500;
+    });
+
+    let p = match client.renew_policy(
+        &holder,
+        &1u32,
+        &AgeBand::Adult,
+        &CoverageType::Standard,
+        &80u32,
+        &Some(CoverageType::Premium),
+        &Some(2_000_000i128),
+    ) {
+        RenewPolicyOutcome::Renewed(p) => p,
+        RenewPolicyOutcome::Lapsed => panic!("expected renewed"),
+    };
+
+    assert_eq!(p.coverage, 2_000_000i128);
+    assert_eq!(p.premium, 2_184_000i128);
+    let events_debug = soroban_sdk::testutils::arbitrary::std::format!("{:?}", env.events().all());
+    assert!(events_debug.contains("PolicyRenewed"));
+    assert!(events_debug.contains("old_coverage"));
+    assert!(events_debug.contains("new_coverage"));
+}
+
+#[test]
+fn renew_with_downgrade_reverts() {
+    let (env, client, _admin, token) = setup();
+    let holder = Address::generate(&env);
+    client.test_seed_policy(&holder, &1u32, &1_000_000i128, &2_000u32);
+
+    token::StellarAssetClient::new(&env, &token).mint(&holder, &500_000_000i128);
+    token::Client::new(&env, &token).approve(
+        &holder,
+        &client.address,
+        &500_000_000i128,
+        &(5_000u32),
+    );
+
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 1_500;
+    });
+
+    assert_try_renew_fails_with(
+        client.try_renew_policy(
+            &holder,
+            &1u32,
+            &AgeBand::Adult,
+            &CoverageType::Standard,
+            &80u32,
+            &Some(CoverageType::Basic),
+            &Some(500_000i128),
+        ),
+        "InvalidCoverage",
     );
 }
 
@@ -274,6 +353,7 @@ fn initiate_then_process_expired_after_natural_duration() {
             beneficiary: None,
             deductible: None,
             expected_nonce: None,
+            region_code: None,
         },
     );
     let end = policy.end_ledger;

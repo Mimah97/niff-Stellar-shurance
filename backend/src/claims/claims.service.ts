@@ -8,6 +8,7 @@ import { TenantContextService } from '../tenant/tenant-context.service';
 import { claimTenantWhere, assertTenantOwnership } from '../tenant/tenant-filter.helper';
 import { ReconciliationService } from '../indexer/reconciliation.service';
 import { ClaimAggregationService } from './services/claim-aggregation.service';
+import { ClaimSummaryCacheService } from './services/claim-summary-cache.service';
 import {
   ClaimDetailResponseDto,
   ClaimsListResponseDto,
@@ -40,6 +41,7 @@ export class ClaimsService {
     private readonly tenantCtx: TenantContextService,
     private readonly reconciliation: ReconciliationService,
     private readonly aggregation: ClaimAggregationService,
+    private readonly claimSummaryCache: ClaimSummaryCacheService,
   ) {
     this.cacheTtl = this.config.get<number>('CACHE_TTL_SECONDS', 60);
     this.indexerNetwork = this.config.get<string>('STELLAR_NETWORK', 'testnet');
@@ -49,55 +51,50 @@ export class ClaimsService {
     const { after, status } = params;
     const limit = clampLimit(params.limit);
     const tenantId = this.tenantCtx.tenantId;
-    const cacheKey = `claims:list:${tenantId ?? 'global'}:${after ?? 'start'}:${limit}:${status ?? 'all'}`;
-    const cached = await this.redis.get<ClaimsListResponseDto>(cacheKey);
+    const cacheKey = this.claimSummaryCache.key({ tenantId, after, limit, status });
 
-    if (cached) {
-      this.logger.debug(`Cache hit for ${cacheKey}`);
-      return cached;
-    }
+    return this.claimSummaryCache.getOrCompute(cacheKey, async () => {
+      this.logger.debug(`Claim summary cache miss for ${cacheKey}`);
 
-    const lastLedger = await this.getLastLedger();
-    const statusFilter = status
-      ? { status: status.toUpperCase() as 'PENDING' | 'APPROVED' | 'PAID' | 'REJECTED' }
-      : {};
-    const keysetWhere = buildKeysetWhere(after);
-    const where: Prisma.ClaimWhereInput = claimTenantWhere(tenantId, {
-      ...statusFilter,
-      ...(keysetWhere ?? {}),
-    });
+      const lastLedger = await this.getLastLedger();
+      const statusFilter = status
+        ? { status: status.toUpperCase() as 'PENDING' | 'APPROVED' | 'PAID' | 'REJECTED' }
+        : {};
+      const keysetWhere = buildKeysetWhere(after);
+      const where: Prisma.ClaimWhereInput = claimTenantWhere(tenantId, {
+        ...statusFilter,
+        ...(keysetWhere ?? {}),
+      });
 
-    const [claims, total] = await Promise.all([
-      this.prisma.claim.findMany({
-        where,
-        include: {
-          votes: { where: { deletedAt: null }, select: { vote: true } },
-        },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        take: limit,
-      }),
-      this.prisma.claim.count({ where: claimTenantWhere(tenantId, statusFilter) }),
-    ]);
-
-    const response: ClaimsListResponseDto = {
-      data: await Promise.all(
-        claims.map(async (claim) => {
-          const agg = await this.aggregation.aggregate(claim.id, lastLedger);
-          return this.claimViewMapper.transformClaim(claim, lastLedger, {
-            quorum_progress_pct: agg.quorum_progress_pct,
-            votes_needed: agg.votes_needed,
-            deadline_estimate_utc: agg.deadline_estimate_utc,
-          });
+      const [claims, total] = await Promise.all([
+        this.prisma.claim.findMany({
+          where,
+          include: {
+            votes: { where: { deletedAt: null }, select: { vote: true } },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: limit,
         }),
-      ),
-      pagination: {
-        next_cursor: buildNextCursor(claims, limit, total),
-        total,
-      },
-    };
+        this.prisma.claim.count({ where: claimTenantWhere(tenantId, statusFilter) }),
+      ]);
 
-    await this.redis.set(cacheKey, response, this.cacheTtl);
-    return response;
+      return {
+        data: await Promise.all(
+          claims.map(async (claim) => {
+            const agg = await this.aggregation.aggregate(claim.id, lastLedger);
+            return this.claimViewMapper.transformClaim(claim, lastLedger, {
+              quorum_progress_pct: agg.quorum_progress_pct,
+              votes_needed: agg.votes_needed,
+              deadline_estimate_utc: agg.deadline_estimate_utc,
+            });
+          }),
+        ),
+        pagination: {
+          next_cursor: buildNextCursor(claims, limit, total),
+          total,
+        },
+      };
+    });
   }
 
   async getClaimsNeedingVote(

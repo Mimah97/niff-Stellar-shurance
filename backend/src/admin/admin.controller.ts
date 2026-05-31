@@ -14,12 +14,14 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { Request, Response } from 'express';
-import { Prisma } from '@prisma/client';
+import { ClaimStatus, Prisma } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminRoleGuard } from './guards/admin-role.guard';
 import { AdminService } from './admin.service';
@@ -44,9 +46,22 @@ class PrivacyRequestDto {
   @IsOptional() @IsString() notes?: string;
 }
 
+class ClaimStatusOverrideDto {
+  @IsEnum(ClaimStatus) newStatus!: ClaimStatus;
+  @IsString() @IsNotEmpty() reason!: string;
+}
+
 type AdminRequest = Request & {
   user?: {
     walletAddress?: string;
+    scope?: string;
+    scopes?: string[];
+  };
+  adminIdentity?: {
+    staffId?: string;
+    email?: string;
+    role?: string;
+    scopes?: string[];
   };
 };
 
@@ -55,6 +70,8 @@ type AdminRequest = Request & {
 @UseGuards(JwtAuthGuard, AdminRoleGuard)
 @Controller('admin')
 export class AdminController {
+  private readonly logger = new Logger(AdminController.name);
+
   constructor(
     private readonly adminService: AdminService,
     private readonly adminPoliciesService: AdminPoliciesService,
@@ -274,6 +291,65 @@ export class AdminController {
       ipAddress: req.ip,
     });
     return result;
+  }
+
+  /**
+   * POST /admin/claims/:id/override
+   *
+   * Force a non-terminal claim to a new off-chain status. Requires elevated
+   * admin scope and writes the immutable audit row before mutating the claim.
+   */
+  @Post('claims/:id/override')
+  @ApiOperation({ summary: 'Force a claim status transition with elevated admin scope' })
+  async overrideClaimStatus(
+    @Param('id') idParam: string,
+    @Body() dto: ClaimStatusOverrideDto,
+    @Req() req: AdminRequest,
+  ) {
+    this.requireElevatedScope(req);
+    const claimId = Number(idParam);
+    if (!Number.isInteger(claimId) || claimId < 0) {
+      throw new BadRequestException('id must be a non-negative integer');
+    }
+    const reason = dto.reason.trim();
+    if (!reason) {
+      throw new BadRequestException('reason must be non-empty');
+    }
+
+    const actor =
+      req.adminIdentity?.email ??
+      req.adminIdentity?.staffId ??
+      req.user?.walletAddress ??
+      'unknown';
+    const before = await this.adminService.getClaimForOverride(claimId);
+    await this.auditService.write({
+      actor,
+      action: 'claim_status_override',
+      payload: {
+        claimId,
+        oldStatus: before.status,
+        newStatus: dto.newStatus,
+        reason,
+        requestBody: dto,
+      },
+      ipAddress: req.ip,
+    });
+
+    const updated = await this.adminService.overrideClaimStatus(claimId, dto.newStatus);
+    this.sorobanService
+      .tryEmitClaimStatusOverrideEvent({
+        claimId,
+        oldStatus: before.status,
+        newStatus: dto.newStatus,
+        reason,
+        actor,
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Soroban claim override event emission failed for ${claimId}: ${msg}`);
+      });
+
+    return { claimId, oldStatus: before.status, newStatus: updated.status, status: 'updated' };
   }
 
   /**

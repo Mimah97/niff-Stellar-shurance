@@ -5,7 +5,9 @@ pub mod admin;
 mod calculator;
 mod claim;
 pub mod commit_reveal;
+pub mod delegation;
 pub mod events;
+pub mod governance;
 mod governance_token;
 mod ledger;
 pub mod policy;
@@ -23,11 +25,12 @@ mod oracle;
 #[cfg(feature = "experimental")]
 pub use oracle::*;
 
-use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, Address, Env, Vec};
+use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, Address, Env, String, Vec};
 
 #[contract]
 pub struct NiffyInsure;
 pub use admin::{AdminAction, AdminError, PendingAdminAction};
+pub use governance::{GovernanceError, Proposal};
 pub use policy::{PolicyError, RenewalError};
 pub use policy_lifecycle::PolicyError as LifecyclePolicyError;
 
@@ -38,6 +41,23 @@ pub enum InitError {
     AlreadyInitialized = 1,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[soroban_sdk::contracterror]
+#[repr(u32)]
+pub enum VetError {
+    /// Vet does not have the required specialization for this record type.
+    InsufficientSpecialization = 1,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[soroban_sdk::contracterror]
+#[repr(u32)]
+pub enum SubscriptionError {
+    /// Address has reached the maximum of 10 active subscriptions.
+    TooManySubscriptions = 1,
+    /// Subscription not found or already expired.
+    NotFound = 2,
+}
 #[contractevent(topics = ["niffyinsure", "allowed_asset_updated"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AllowedAssetUpdated {
@@ -53,6 +73,21 @@ struct VotingDurationUpdated {
     pub new_ledgers: u32,
 }
 
+#[contractevent(topics = ["niffyinsure", "asset_claim_bounds_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AssetClaimBoundsUpdated {
+    #[topic]
+    pub asset: Address,
+    pub min_claim_amount: i128,
+    pub max_claim_amount: i128,
+}
+
+#[contractevent(topics = ["niffyinsure", "reinsurance_contract_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReinsuranceContractUpdated {
+    pub reinsurance_contract: Address,
+}
+
 #[contractevent(topics = ["niffyinsure", "quorum_updated"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct QuorumUpdated {
@@ -60,25 +95,12 @@ struct QuorumUpdated {
     pub new_bps: u32,
 }
 
-#[contractevent(topics = ["niffyinsure", "protocol_fee_updated"])]
+#[contractevent(topics = ["niffyinsure", "policy_type_registered"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ProtocolFeeUpdated {
-    pub old_bps: u32,
-    pub new_bps: u32,
-}
-
-#[contractevent(topics = ["niffyinsure", "fee_recipient_updated"])]
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct FeeRecipientUpdated {
-    pub old_recipient: Address,
-    pub new_recipient: Address,
-}
-
-#[contractevent(topics = ["niffyinsure", "min_solvency_ratio_updated"])]
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct MinSolvencyRatioUpdated {
-    pub old_bps: u32,
-    pub new_bps: u32,
+struct PolicyTypeRegistered {
+    pub policy_type: types::PolicyType,
+    /// `true` = registered/active, `false` = deregistered/inactive.
+    pub active: bool,
 }
 
 #[contractevent(topics = ["niffyinsure", "pause_toggled"])]
@@ -87,9 +109,27 @@ struct PauseToggled {
     #[topic]
     pub admin: Address,
     pub paused: bool,
+    /// Numeric reason code derived from `PauseReason` (0=SecurityIncident, 1=UpgradePending,
+    /// 2=SolvencyRisk, 3=Regulatory). On unpause this field is 0 (reason cleared).
     pub reason_code: u32,
     pub bind_paused: bool,
     pub claims_paused: bool,
+}
+
+/// Convert a `PauseReason` variant to its numeric code for event emission.
+///
+/// Codes:
+/// - 0 = SecurityIncident
+/// - 1 = UpgradePending
+/// - 2 = SolvencyRisk
+/// - 3 = Regulatory
+fn pause_reason_to_code(reason: &types::PauseReason) -> u32 {
+    match reason {
+        types::PauseReason::SecurityIncident => 0,
+        types::PauseReason::UpgradePending => 1,
+        types::PauseReason::SolvencyRisk => 2,
+        types::PauseReason::Regulatory => 3,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -111,6 +151,7 @@ impl NiffyInsure {
         storage::set_min_solvency_ratio_bps(&env, 0);
         storage::set_voting_duration_ledgers(&env, ledger::VOTE_WINDOW_LEDGERS);
         storage::set_quorum_bps(&env, types::DEFAULT_QUORUM_BPS);
+        admin::emit_admin_action(&env, &admin, "initialize");
         Ok(())
     }
 
@@ -246,11 +287,8 @@ impl NiffyInsure {
             53 => validate::Error::ClaimNotProcessing,
             54 => validate::Error::RollingClaimCapExceeded,
             55 => validate::Error::PayoutDeadlineNotReached,
-            56 => validate::Error::VoteDelegated,
-            57 => validate::Error::CircularDelegation,
-            58 => validate::Error::ProtocolFeeOutOfBounds,
-            59 => validate::Error::SolvencyRatioOutOfBounds,
-            60 => validate::Error::ClaimBatchTooLarge,
+            56 => validate::Error::InsufficientEvidence,
+            57 => validate::Error::CooldownActive,
             _ => validate::Error::ClaimNotApproved,
         };
         policy::map_quote_error(&env, err)
@@ -262,7 +300,11 @@ impl NiffyInsure {
     ) -> Result<(), validate::Error> {
         let admin = storage::get_admin(&env);
         admin.require_auth();
-        premium::update_multiplier_table(&env, &new_table)
+        let result = premium::update_multiplier_table(&env, &new_table);
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "update_multiplier_table");
+        }
+        result
     }
 
     /// Admin-only: update a single multiplier entry without redeploying the contract.
@@ -281,7 +323,11 @@ impl NiffyInsure {
         let admin = storage::get_admin(&env);
         admin.require_auth();
         storage::bump_instance(&env);
-        premium::admin_set_premium_multiplier(&env, key, value)
+        let result = premium::admin_set_premium_multiplier(&env, key, value);
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "admin_set_premium_multiplier");
+        }
+        result
     }
 
     pub fn get_multiplier_table(env: Env) -> types::MultiplierTable {
@@ -297,7 +343,7 @@ impl NiffyInsure {
         symbol_hint: soroban_sdk::String,
         decimals: u32,
     ) {
-        let _admin = admin::require_admin(&env);
+        let admin = admin::require_admin(&env);
         storage::bump_instance(&env);
         claim::set_allowed_asset(&env, &asset, allowed);
         AllowedAssetUpdated {
@@ -316,6 +362,7 @@ impl NiffyInsure {
             },
             if allowed { decimals } else { 0 },
         );
+        admin::emit_admin_action(&env, &admin, "set_allowed_asset");
     }
 
     pub fn is_allowed_asset(env: Env, asset: Address) -> bool {
@@ -420,6 +467,18 @@ impl NiffyInsure {
         claim::process_deadline(&env, claim_id)
     }
 
+    /// Permissionless keeper: finalize multiple expired claims in one transaction.
+    ///
+    /// Processes each claim independently; skips already-finalized or ineligible claims.
+    /// Reverts before any processing if `claim_ids.len() > BATCH_FINALIZE_MAX` (20).
+    /// Returns `(processed, skipped)` counts.
+    pub fn finalize_expired_batch(
+        env: Env,
+        claim_ids: soroban_sdk::Vec<u64>,
+    ) -> Result<(u32, u32), validate::Error> {
+        claim::finalize_expired_batch(&env, &claim_ids)
+    }
+
     /// Permissionless keeper: auto-reject an approved claim once its payout deadline has elapsed.
     pub fn process_payout_timeout(
         env: Env,
@@ -444,6 +503,7 @@ impl NiffyInsure {
         admin.require_auth();
         ledger::validate_voting_duration_ledgers(ledgers)?;
         storage::set_voting_duration_ledgers(&env, ledgers);
+        admin::emit_admin_action(&env, &admin, "admin_set_vote_duration_ledgers");
         Ok(())
     }
 
@@ -469,6 +529,7 @@ impl NiffyInsure {
             new_bps: quorum_bps,
         }
         .publish(&env);
+        admin::emit_admin_action(&env, &admin, "admin_set_quorum_bps");
         Ok(())
     }
 
@@ -535,7 +596,18 @@ impl NiffyInsure {
     pub fn process_claim(env: Env, claim_id: u64) -> Result<(), validate::Error> {
         let admin = storage::get_admin(&env);
         admin.require_auth();
-        claim::process_claim(&env, claim_id)
+        let result = claim::process_claim(&env, claim_id);
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "process_claim");
+        }
+        result
+    }
+
+    /// Admin-only: dispute an approved claim during the dispute window.
+    pub fn admin_dispute_claim(env: Env, claim_id: u64) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        claim::dispute_claim(&env, claim_id)
     }
 
     pub fn get_claim(env: Env, claim_id: u64) -> Result<types::Claim, validate::Error> {
@@ -606,6 +678,28 @@ impl NiffyInsure {
         storage::get_voters(&env)
     }
 
+    pub fn create_proposal(
+        env: Env,
+        creator: Address,
+        param_key: soroban_sdk::String,
+        new_value: u32,
+    ) -> u64 {
+        governance::create_proposal(&env, creator, param_key, new_value)
+    }
+
+    pub fn vote_proposal(
+        env: Env,
+        voter: Address,
+        proposal_id: u64,
+        approve: bool,
+    ) -> Result<(), GovernanceError> {
+        governance::vote_proposal(&env, voter, proposal_id, approve)
+    }
+
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Option<Proposal> {
+        governance::get_proposal(&env, proposal_id)
+    }
+
     pub fn voter_registry_len(env: Env) -> u32 {
         storage::get_voters(&env).len()
     }
@@ -622,6 +716,7 @@ impl NiffyInsure {
         let admin = storage::get_admin(&env);
         admin.require_auth();
         storage::set_calc_address(&env, &calculator);
+        admin::emit_admin_action(&env, &admin, "set_calculator");
     }
 
     pub fn clear_calculator(env: Env) {
@@ -630,10 +725,194 @@ impl NiffyInsure {
         env.storage()
             .instance()
             .remove(&storage::DataKey::CalcAddress);
+        admin::emit_admin_action(&env, &admin, "clear_calculator");
     }
 
     pub fn get_calculator(env: Env) -> Option<Address> {
         storage::get_calc_address(&env)
+    }
+
+    // ── Region registry ───────────────────────────────────────────────────────
+
+    /// Admin-only: upsert a region code in the registry.
+    pub fn admin_set_region(
+        env: Env,
+        code: String,
+        config: types::RegionConfig,
+    ) {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        let mut registry = storage::get_region_registry(&env);
+        registry.set(code, config);
+        storage::set_region_registry(&env, &registry);
+    }
+
+    /// Admin-only: remove a region code from the registry.
+    pub fn admin_remove_region(env: Env, code: String) {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        let mut registry = storage::get_region_registry(&env);
+        registry.remove(code);
+        storage::set_region_registry(&env, &registry);
+    }
+
+    /// Read-only: get a region config by code.
+    pub fn get_region_config(
+        env: Env,
+        code: String,
+    ) -> Option<types::RegionConfig> {
+        storage::get_region_config(&env, &code)
+    }
+
+    // ── Treatment tracking ────────────────────────────────────────────────────
+
+    /// Record a treatment for a pet. Increments the treatment counter for `pet_id`.
+    /// Caller must be authenticated (holder of the associated policy).
+    pub fn record_treatment(env: Env, holder: Address, pet_id: u64) -> u64 {
+        holder.require_auth();
+        storage::bump_instance(&env);
+        storage::increment_treatment_count(&env, pet_id)
+    }
+
+    /// Read-only: total number of treatments recorded for `pet_id`.
+    pub fn get_treatment_count(env: Env, pet_id: u64) -> u64 {
+        storage::get_treatment_count(&env, pet_id)
+    }
+
+    // ── Vet specialization registry ───────────────────────────────────────────
+
+    /// Admin-only: register or update a vet's verified specializations.
+    pub fn admin_set_vet_specializations(
+        env: Env,
+        vet: Address,
+        specializations: Vec<types::Specialization>,
+    ) {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_vet_specializations(&env, &vet, &specializations);
+    }
+
+    /// Read-only: return the verified specializations for a vet address.
+    pub fn get_vet_specializations(env: Env, vet: Address) -> Vec<types::Specialization> {
+        storage::get_vet_specializations(&env, &vet)
+    }
+
+    /// Validate that `vet` is qualified to submit a record of `record_type`.
+    /// Reverts with `VetError::InsufficientSpecialization` if not qualified.
+    pub fn assert_vet_qualified(
+        env: Env,
+        vet: Address,
+        record_type: types::MedicalRecordType,
+    ) -> Result<(), VetError> {
+        match record_type.required_specialization() {
+            None => Ok(()),
+            Some(required) => {
+                if storage::vet_has_specialization(&env, &vet, &required) {
+                    Ok(())
+                } else {
+                    Err(VetError::InsufficientSpecialization)
+                }
+            }
+        }
+    }
+
+    // ── Event subscription filter system ──────────────────────────────────────
+
+    /// Register a subscription filter. TTL is `ttl_ledgers` from the current ledger.
+    /// Max 10 active subscriptions per address; expired subscriptions are pruned on registration.
+    /// Returns the new subscription ID.
+    pub fn register_subscription(
+        env: Env,
+        owner: Address,
+        event_types: Vec<types::EventType>,
+        pet_ids: Vec<u64>,
+        ttl_ledgers: u32,
+    ) -> Result<u64, SubscriptionError> {
+        owner.require_auth();
+        storage::bump_instance(&env);
+
+        let now = env.ledger().sequence();
+        let expires_at = now.saturating_add(ttl_ledgers);
+
+        // Prune expired subscriptions for this owner.
+        let mut ids = storage::get_owner_subscription_ids(&env, &owner);
+        let mut active: Vec<u64> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if let Some(sub) = storage::get_subscription(&env, id) {
+                if sub.expires_at >= now {
+                    active.push_back(id);
+                } else {
+                    storage::remove_subscription(&env, id);
+                }
+            }
+        }
+        ids = active;
+
+        if ids.len() >= types::MAX_SUBSCRIPTIONS_PER_ADDRESS {
+            return Err(SubscriptionError::TooManySubscriptions);
+        }
+
+        let sub_id = storage::next_subscription_id(&env);
+        let sub = types::Subscription {
+            id: sub_id,
+            owner: owner.clone(),
+            event_types,
+            pet_ids,
+            expires_at,
+        };
+        storage::set_subscription(&env, &sub);
+        ids.push_back(sub_id);
+        storage::set_owner_subscription_ids(&env, &owner, &ids);
+
+        Ok(sub_id)
+    }
+
+    /// Read-only: get a subscription by ID. Returns None if not found or expired.
+    pub fn get_subscription(env: Env, id: u64) -> Option<types::Subscription> {
+        let now = env.ledger().sequence();
+        storage::get_subscription(&env, id).filter(|s| s.expires_at >= now)
+    }
+
+    /// Cancel a subscription. Only the owner may cancel.
+    pub fn cancel_subscription(
+        env: Env,
+        owner: Address,
+        sub_id: u64,
+    ) -> Result<(), SubscriptionError> {
+        owner.require_auth();
+        let sub = storage::get_subscription(&env, sub_id).ok_or(SubscriptionError::NotFound)?;
+        if sub.owner != owner {
+            return Err(SubscriptionError::NotFound);
+        }
+        storage::remove_subscription(&env, sub_id);
+        // Remove from owner index.
+        let ids = storage::get_owner_subscription_ids(&env, &owner);
+        let mut updated: Vec<u64> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if id != sub_id {
+                updated.push_back(id);
+            }
+        }
+        storage::set_owner_subscription_ids(&env, &owner, &updated);
+        Ok(())
+    }
+
+    /// Read-only: list active (non-expired) subscription IDs for an owner.
+    pub fn list_subscriptions(env: Env, owner: Address) -> Vec<u64> {
+        let now = env.ledger().sequence();
+        let ids = storage::get_owner_subscription_ids(&env, &owner);
+        let mut active: Vec<u64> = Vec::new(&env);
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if let Some(sub) = storage::get_subscription(&env, id) {
+                if sub.expires_at >= now {
+                    active.push_back(id);
+                }
+            }
+        }
+        active
     }
 
     // ── Policy domain ────────────────────────────────────────────────────
@@ -667,6 +946,7 @@ impl NiffyInsure {
             opts.beneficiary,
             opts.deductible,
             opts.expected_nonce,
+            opts.metadata_uri,
         )
     }
 
@@ -678,6 +958,18 @@ impl NiffyInsure {
         beneficiary: Option<Address>,
     ) -> Result<(), policy::PolicyError> {
         policy::set_beneficiary(&env, holder, policy_id, beneficiary)
+    }
+
+    /// Admin-only: update the policy metadata URI.
+    pub fn admin_update_policy_metadata_uri(
+        env: Env,
+        holder: Address,
+        policy_id: u32,
+        new_uri: soroban_sdk::String,
+    ) -> Result<(), policy::PolicyError> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        policy::update_policy_metadata_uri(&env, holder, policy_id, new_uri)
     }
 
     /// Read-only: retrieve a persisted policy by (holder, policy_id).
@@ -801,6 +1093,8 @@ impl NiffyInsure {
         age_band: types::AgeBand,
         coverage_type: types::CoverageType,
         safety_score: u32,
+        new_coverage_tier: Option<types::CoverageType>,
+        new_coverage_amount: Option<i128>,
     ) -> Result<types::RenewPolicyOutcome, policy::PolicyError> {
         policy::renew_policy(
             &env,
@@ -809,6 +1103,8 @@ impl NiffyInsure {
             age_band,
             coverage_type,
             safety_score,
+            new_coverage_tier,
+            new_coverage_amount,
         )
     }
 
@@ -829,14 +1125,18 @@ impl NiffyInsure {
         reason: types::TerminationReason,
         allow_open_claims: bool,
     ) -> Result<(), policy_lifecycle::PolicyError> {
-        policy_lifecycle::admin_terminate_policy(
+        let result = policy_lifecycle::admin_terminate_policy(
             &env,
-            admin,
+            admin.clone(),
             holder,
             policy_id,
             reason,
             allow_open_claims,
-        )
+        );
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "admin_terminate_policy");
+        }
+        result
     }
 
     pub fn propose_admin(env: Env, new_admin: Address) {
@@ -940,6 +1240,41 @@ impl NiffyInsure {
         storage::get_max_evidence_count(&env)
     }
 
+    /// Admin-only: set the minimum number of evidence entries required per claim.
+    /// `new_min` must not exceed the current max evidence count.
+    /// Setting to 0 disables the minimum (default).
+    pub fn admin_set_min_evidence_count(env: Env, new_min: u32) -> Result<(), AdminError> {
+        admin::set_min_evidence_count(&env, new_min)
+    }
+
+    /// Read the current min evidence count (falls back to 0 when unset).
+    pub fn get_min_evidence_count(env: Env) -> u32 {
+        storage::get_min_evidence_count(&env)
+    }
+
+    /// Admin-only: set the maximum vote weight cap for governance-token-weighted voting.
+    /// Must be > 0. Falls back to i128::MAX (uncapped) when unset.
+    pub fn admin_set_max_weight_cap(env: Env, new_cap: i128) -> Result<(), AdminError> {
+        admin::set_max_weight_cap(&env, new_cap)
+    }
+
+    /// Read the current max weight cap (falls back to i128::MAX when unset).
+    pub fn get_max_weight_cap(env: Env) -> i128 {
+        storage::get_max_weight_cap(&env)
+    }
+
+    /// Admin-only: set the per-policy cooldown window in ledgers between claim resolutions.
+    /// 0 disables cooldown (default). Max is [`admin::MAX_COOLDOWN_LEDGERS`] (~30 days).
+    /// Does not affect claims already in `Processing`.
+    pub fn admin_set_cooldown_ledgers(env: Env, new_ledgers: u32) -> Result<(), AdminError> {
+        admin::set_cooldown_ledgers(&env, new_ledgers)
+    }
+
+    /// Read the current cooldown window in ledgers (falls back to 0 when unset).
+    pub fn get_cooldown_ledgers(env: Env) -> u32 {
+        storage::get_cooldown_ledgers(&env)
+    }
+
     /// Admin-only: update the allowlisted IPFS gateway URL prefixes for evidence validation.
     /// Evidence URLs must start with `ipfs://` or one of the allowlisted gateway prefixes.
     pub fn admin_set_gateway_allowlist(env: Env, gateways: Vec<String>) -> Result<(), AdminError> {
@@ -968,8 +1303,12 @@ impl NiffyInsure {
         asset: Address,
         table: Option<types::MultiplierTable>,
     ) -> Result<(), validate::Error> {
-        admin::require_admin(&env);
-        premium::admin_set_asset_premium_table(&env, &asset, table)
+        let admin = admin::require_admin(&env);
+        let result = premium::admin_set_asset_premium_table(&env, &asset, table);
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "admin_set_asset_premium_table");
+        }
+        result
     }
 
     /// Read the asset-specific multiplier table for `asset`.
@@ -979,6 +1318,61 @@ impl NiffyInsure {
         asset: Address,
     ) -> Option<types::MultiplierTable> {
         storage::get_asset_premium_table(&env, &asset)
+    }
+
+    // ── Policy type registry ──────────────────────────────────────────────────
+
+    /// Admin-only: register or update a policy type in the registry.
+    ///
+    /// Once registered and active, `initiate_policy` will accept this type.
+    /// Emits `PolicyTypeRegistered`.
+    pub fn admin_register_policy_type(
+        env: Env,
+        policy_type: types::PolicyType,
+        config: types::PolicyTypeConfig,
+    ) -> Result<(), admin::AdminError> {
+        admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_policy_type_config(&env, &policy_type, &config);
+        storage::set_policy_type_active(&env, &policy_type, true);
+        PolicyTypeRegistered {
+            policy_type,
+            active: true,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Admin-only: deregister a policy type (marks it inactive).
+    ///
+    /// Existing policies of this type remain valid; only new initiations are blocked.
+    /// Emits `PolicyTypeRegistered` with `active = false`.
+    pub fn admin_deregister_policy_type(
+        env: Env,
+        policy_type: types::PolicyType,
+    ) -> Result<(), admin::AdminError> {
+        admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_policy_type_active(&env, &policy_type, false);
+        PolicyTypeRegistered {
+            policy_type,
+            active: false,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Read-only: returns `true` if the policy type is registered and active.
+    pub fn is_policy_type_active(env: Env, policy_type: types::PolicyType) -> bool {
+        storage::is_policy_type_active(&env, &policy_type)
+    }
+
+    /// Read-only: returns the config for a policy type, or `None` if not registered.
+    pub fn get_policy_type_config(
+        env: Env,
+        policy_type: types::PolicyType,
+    ) -> Option<types::PolicyTypeConfig> {
+        storage::get_policy_type_config(&env, &policy_type)
     }
 
     // ═════════════════════════════════════════════════════════════════════════════
@@ -992,48 +1386,54 @@ impl NiffyInsure {
     // Read-only methods continue to work for transparency.
     // ═════════════════════════════════════════════════════════════════════════════
 
-    /// Pause the contract with optional reason code.
-    /// Reason codes: 0=maintenance, 1=vulnerability, 2=key_compromise, 3=other
-    /// Emits PauseToggled event with admin, paused=true, and reason code.
-    pub fn pause(env: Env, admin: Address, reason_code: u32) {
+    /// Pause the contract with a structured reason.
+    ///
+    /// `reason` is stored on-chain so incident responders can read it via simulation
+    /// without authentication. Emits `PauseToggled` with the reason code.
+    pub fn pause(env: Env, admin: Address, reason: types::PauseReason) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can pause");
         storage::set_paused(&env, true);
+        storage::set_pause_reason(&env, Some(reason.clone()));
 
         let flags = storage::get_pause_flags(&env);
+        let reason_code = pause_reason_to_code(&reason);
         PauseToggled {
-            admin,
+            admin: admin.clone(),
             paused: true,
             reason_code,
             bind_paused: flags.bind_paused,
             claims_paused: flags.claims_paused,
         }
         .publish(&env);
+        admin::emit_admin_action(&env, &admin, "pause");
     }
 
-    /// Unpause the contract with optional reason code.
-    /// Reason codes: 0=resolved, 1=manual, 2=other
-    /// Emits PauseToggled event with admin, paused=false, and reason code.
-    pub fn unpause(env: Env, admin: Address, reason_code: u32) {
+    /// Unpause the contract. Clears the stored pause reason.
+    /// Emits `PauseToggled` with `paused=false` and `reason_code=0`.
+    pub fn unpause(env: Env, admin: Address) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can unpause");
         storage::set_paused(&env, false);
+        // Clear the pause reason on unpause.
+        storage::set_pause_reason(&env, None);
 
         let flags = storage::get_pause_flags(&env);
         PauseToggled {
-            admin,
+            admin: admin.clone(),
             paused: false,
-            reason_code,
+            reason_code: 0,
             bind_paused: flags.bind_paused,
             claims_paused: flags.claims_paused,
         }
         .publish(&env);
+        admin::emit_admin_action(&env, &admin, "unpause");
     }
 
     /// Granular pause: pause only policy binding (initiate/renew).
-    pub fn pause_bind(env: Env, admin: Address, reason_code: u32) {
+    pub fn pause_bind(env: Env, admin: Address, reason: types::PauseReason) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can pause");
@@ -1041,19 +1441,22 @@ impl NiffyInsure {
         let mut flags = storage::get_pause_flags(&env);
         flags.bind_paused = true;
         storage::set_pause_flags(&env, &flags);
+        storage::set_pause_reason(&env, Some(reason.clone()));
 
+        let reason_code = pause_reason_to_code(&reason);
         PauseToggled {
-            admin,
+            admin: admin.clone(),
             paused: true,
             reason_code,
             bind_paused: flags.bind_paused,
             claims_paused: flags.claims_paused,
         }
         .publish(&env);
+        admin::emit_admin_action(&env, &admin, "pause_bind");
     }
 
     /// Granular pause: pause only claims (file/vote/finalize).
-    pub fn pause_claims(env: Env, admin: Address, reason_code: u32) {
+    pub fn pause_claims(env: Env, admin: Address, reason: types::PauseReason) {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env);
         assert!(admin == stored_admin, "only admin can pause");
@@ -1061,15 +1464,18 @@ impl NiffyInsure {
         let mut flags = storage::get_pause_flags(&env);
         flags.claims_paused = true;
         storage::set_pause_flags(&env, &flags);
+        storage::set_pause_reason(&env, Some(reason.clone()));
 
+        let reason_code = pause_reason_to_code(&reason);
         PauseToggled {
-            admin,
+            admin: admin.clone(),
             paused: true,
             reason_code,
             bind_paused: flags.bind_paused,
             claims_paused: flags.claims_paused,
         }
         .publish(&env);
+        admin::emit_admin_action(&env, &admin, "pause_claims");
     }
 
     /// Get current pause state (legacy - true if ANY pause flag is set).
@@ -1080,6 +1486,13 @@ impl NiffyInsure {
     /// Get detailed pause flags (bind_paused, claims_paused).
     pub fn get_pause_flags(env: Env) -> storage::PauseFlags {
         storage::get_pause_flags(&env)
+    }
+
+    /// Read-only: get the current pause reason.
+    /// Returns `None` when the contract is unpaused or no reason was stored.
+    /// Safe to call via simulation without authentication.
+    pub fn get_pause_reason(env: Env) -> Option<types::PauseReason> {
+        storage::get_pause_reason(&env)
     }
 
     // ── Rolling claim cap (ledger-window cumulative paid per policy) ─────────
@@ -1113,8 +1526,12 @@ impl NiffyInsure {
 
     /// Admin: set rolling claim cap. Bounded unless `i128::MAX` (uncapped). Emits `ClaimCapUpdated`.
     pub fn set_rolling_claim_cap(env: Env, new_cap: i128) -> Result<(), AdminError> {
-        let _admin = admin::require_admin(&env);
-        rolling_claim_cap::try_set_cap(&env, new_cap)
+        let admin = admin::require_admin(&env);
+        let result = rolling_claim_cap::try_set_cap(&env, new_cap);
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "set_rolling_claim_cap");
+        }
+        result
     }
 
     /// Admin: set rolling window length in ledgers. Emits `RollingClaimWindowLedgersUpdated`.
@@ -1122,8 +1539,130 @@ impl NiffyInsure {
         env: Env,
         window_ledgers: u32,
     ) -> Result<(), AdminError> {
+        let admin = admin::require_admin(&env);
+        let result = rolling_claim_cap::try_set_window_ledgers(&env, window_ledgers);
+        if result.is_ok() {
+            admin::emit_admin_action(&env, &admin, "set_rolling_claim_window_ledgers");
+        }
+        result
+    }
+
+    // ── Issue #583: Claim fraud score ─────────────────────────────────────────
+
+    /// Admin or delegated oracle: set fraud score (0–100) for a claim.
+    /// High-score claims require elevated quorum at finalization.
+    pub fn set_claim_fraud_score(
+        env: Env,
+        caller: Address,
+        claim_id: u64,
+        score: u32,
+    ) -> Result<(), validate::Error> {
+        caller.require_auth();
+        claim::set_claim_fraud_score(&env, &caller, claim_id, score)
+    }
+
+    /// Read the fraud score for a claim (None if not set).
+    pub fn get_claim_fraud_score(env: Env, claim_id: u64) -> Option<u32> {
+        storage::get_claim_fraud_score(&env, claim_id)
+    }
+
+    /// Admin: set the fraud score threshold above which elevated quorum applies.
+    pub fn admin_set_fraud_score_threshold(env: Env, threshold: u32) -> Result<(), validate::Error> {
         let _admin = admin::require_admin(&env);
-        rolling_claim_cap::try_set_window_ledgers(&env, window_ledgers)
+        if threshold > 100 {
+            return Err(validate::Error::SafetyScoreOutOfRange);
+        }
+        storage::set_fraud_score_threshold(&env, threshold);
+        Ok(())
+    }
+
+    /// Admin: set the elevated quorum bps used when fraud score exceeds threshold.
+    pub fn admin_set_elevated_quorum_bps(env: Env, bps: u32) -> Result<(), validate::Error> {
+        let _admin = admin::require_admin(&env);
+        validate::validate_quorum_bps(bps)?;
+        storage::set_elevated_quorum_bps(&env, bps);
+        Ok(())
+    }
+
+    // ── Issue #587: Asset-specific claim amount bounds ────────────────────────
+
+    /// Admin: set min/max claim amount bounds for an asset.
+    /// Dust claims below min and over-coverage claims above max will revert.
+    pub fn admin_set_asset_claim_bounds(
+        env: Env,
+        asset: Address,
+        min_claim_amount: i128,
+        max_claim_amount: i128,
+    ) -> Result<(), validate::Error> {
+        let _admin = admin::require_admin(&env);
+        if min_claim_amount < 0 || max_claim_amount < min_claim_amount {
+            return Err(validate::Error::ClaimAmountZero);
+        }
+        storage::set_allowed_asset_config(
+            &env,
+            &asset,
+            &types::AllowedAssetConfig { min_claim_amount, max_claim_amount },
+        );
+        AssetClaimBoundsUpdated {
+            asset,
+            min_claim_amount,
+            max_claim_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Read the asset-specific claim bounds (None if not configured).
+    pub fn get_asset_claim_bounds(env: Env, asset: Address) -> Option<types::AllowedAssetConfig> {
+        storage::get_allowed_asset_config(&env, &asset)
+    }
+
+    // ── Issue #585: Admin role delegation ────────────────────────────────────
+
+    /// Admin: grant a temporary delegation to `operator` with specific permissions.
+    pub fn grant_delegation(
+        env: Env,
+        operator: Address,
+        expiry_ledger: u32,
+        permissions: types::DelegationPermissions,
+    ) -> Result<(), validate::Error> {
+        let admin = admin::require_admin(&env);
+        delegation::grant_delegation(&env, &admin, &operator, expiry_ledger, permissions)
+    }
+
+    /// Admin: revoke a delegation before it expires.
+    pub fn revoke_delegation(env: Env, operator: Address) {
+        let admin = admin::require_admin(&env);
+        delegation::revoke_delegation(&env, &admin, &operator);
+    }
+
+    /// Read a delegation record (None if not set or expired).
+    pub fn get_delegation(env: Env, operator: Address) -> Option<types::DelegationRecord> {
+        delegation::get_delegation(&env, &operator)
+    }
+
+    // ── Issue #581: Reinsurance pool ──────────────────────────────────────────
+
+    /// Admin: set the reinsurance contract address.
+    /// When primary treasury is insufficient, overflow is drawn from this contract.
+    pub fn admin_set_reinsurance_contract(env: Env, reinsurance: Address) {
+        let _admin = admin::require_admin(&env);
+        storage::set_reinsurance_contract(&env, &reinsurance);
+        ReinsuranceContractUpdated {
+            reinsurance_contract: reinsurance,
+        }
+        .publish(&env);
+    }
+
+    /// Admin: clear the reinsurance contract (disables reinsurance fallback).
+    pub fn admin_clear_reinsurance_contract(env: Env) {
+        let _admin = admin::require_admin(&env);
+        storage::clear_reinsurance_contract(&env);
+    }
+
+    /// Read the configured reinsurance contract address (None if not set).
+    pub fn get_reinsurance_contract(env: Env) -> Option<Address> {
+        storage::get_reinsurance_contract(&env)
     }
 }
 
@@ -1163,8 +1702,9 @@ impl NiffyInsure {
 
     /// Admin: set the TTL alert threshold for expiry notifications.
     pub fn set_ttl_alert_threshold(env: Env, threshold: u32) -> Result<(), AdminError> {
-        let _admin = admin::require_admin(&env);
+        let admin = admin::require_admin(&env);
         storage::set_ttl_alert_threshold(&env, threshold);
+        admin::emit_admin_action(&env, &admin, "set_ttl_alert_threshold");
         Ok(())
     }
 
@@ -1189,6 +1729,7 @@ impl NiffyInsure {
         assert!(admin == stored, "only admin");
         storage::bump_instance(&env);
         governance_token::set_governance_token_runtime_enabled(&env, enabled);
+        admin::emit_admin_action(&env, &admin, "gov_set_token_runtime_enabled");
     }
 
     pub fn gov_token_address(env: Env) -> Option<Address> {
@@ -1201,6 +1742,7 @@ impl NiffyInsure {
         assert!(admin == stored, "only admin");
         storage::bump_instance(&env);
         governance_token::set_governance_token_address(&env, &token);
+        admin::emit_admin_action(&env, &admin, "gov_set_token_address_stub");
     }
 }
 
@@ -1271,5 +1813,103 @@ impl NiffyInsure {
         admin.require_auth();
         assert!(admin == expected, "only admin can set open claim count");
         storage::set_open_claim(&env, &holder, policy_id, open_claim_count > 0);
+        admin::emit_admin_action(&env, &admin, "admin_set_open_claim_count");
     }
 }
+            44 => validate::Error::ClaimEvidenceUpdateNotAllowed,
+            45 => validate::Error::EvidenceCountOutOfBounds,
+    /// Claimant-only: replace evidence before voting starts.
+    pub fn add_claim_evidence(
+        env: Env,
+        claimant: Address,
+        claim_id: u64,
+        new_evidence: Vec<types::ClaimEvidenceEntry>,
+    ) -> Result<(), validate::Error> {
+        claimant.require_auth();
+        claim::add_claim_evidence(&env, &claimant, claim_id, &new_evidence)
+    }
+
+#[contractevent(topics = ["niffyinsure", "treasury_depositor_updated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TreasuryDepositorUpdated {
+    #[topic]
+    pub depositor: Address,
+    pub allowed: bool,
+}
+
+#[contractevent(topics = ["niffyinsure", "treasury_deposited"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TreasuryDeposited {
+    #[topic]
+    pub depositor: Address,
+    #[topic]
+    pub asset: Address,
+    pub amount: i128,
+    pub at_ledger: u32,
+}
+
+    /// Read-only: whether a depositor is authorized to inject treasury capital.
+    pub fn is_authorized_depositor(env: Env, depositor: Address) -> bool {
+        storage::is_authorized_depositor(&env, &depositor)
+    }
+
+    /// Admin-only: add or remove a treasury depositor from the allowlist.
+    pub fn set_authorized_depositor(
+        env: Env,
+        depositor: Address,
+        allowed: bool,
+    ) -> Result<(), AdminError> {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_authorized_depositor(&env, &depositor, allowed);
+        TreasuryDepositorUpdated { depositor, allowed }.publish(&env);
+        Ok(())
+    }
+
+    /// Authorized depositor-only: transfer capital into the treasury and emit an event.
+    pub fn deposit_treasury(
+        env: Env,
+        depositor: Address,
+        amount: i128,
+        asset: Address,
+    ) -> Result<(), validate::Error> {
+        storage::bump_instance(&env);
+        if amount <= 0 {
+            return Err(validate::Error::ZeroTreasuryDeposit);
+        }
+        if !storage::is_authorized_depositor(&env, &depositor) {
+            return Err(validate::Error::UnauthorizedTreasuryDepositor);
+        }
+
+        depositor.require_auth();
+
+        let client = soroban_sdk::token::TokenClient::new(&env, &asset);
+        client.transfer(&depositor, &env.current_contract_address(), &amount);
+
+        TreasuryDeposited {
+            depositor,
+            asset,
+            amount,
+            at_ledger: env.ledger().sequence(),
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Read-only: whether a contract payout recipient is explicitly allowlisted.
+    pub fn is_allowed_payout_recipient(env: Env, recipient: Address) -> bool {
+        storage::is_allowed_payout_recipient(&env, &recipient)
+    }
+
+    /// Admin-only: add or remove a contract payout recipient from the allowlist.
+    pub fn set_allowed_payout_recipient(
+        env: Env,
+        recipient: Address,
+        allowed: bool,
+    ) -> Result<(), AdminError> {
+        let _admin = admin::require_admin(&env);
+        storage::bump_instance(&env);
+        storage::set_allowed_payout_recipient(&env, &recipient, allowed);
+        Ok(())
+    }

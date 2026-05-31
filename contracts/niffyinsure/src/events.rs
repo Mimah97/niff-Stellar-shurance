@@ -52,6 +52,12 @@
 //! `{ policy_id, claimant, at_ledger }`. Emitted when the claimant withdraws before any vote.
 //! Indexers should surface `Withdrawn` distinctly on the claims board.
 //!
+//! ### claim_status_changed — ClaimStatusChangedData
+//! topics: ("niffyins", "claim_status_changed", claim_id: u64)
+//! ```json
+//! { "version": 1, "old_status": "Processing", "new_status": "Approved", "at_ledger": 1355527 }
+//! ```
+//!
 //! ## Admin / config events (namespace: "niffyins")
 //!
 //! ### tbl_upd — PremiumTableUpdatedData
@@ -159,6 +165,36 @@ pub fn emit_claim_filed(
         amount,
         evidence_hashes,
         filed_at,
+    }
+    .publish(env);
+}
+
+/// Emitted on every claim status transition.
+/// topics: (NS, "claim_status_changed", claim_id)
+/// payload: ClaimStatusChangedData
+#[contractevent(topics = ["niffyins", "claim_status_changed"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimStatusChangedData {
+    #[topic]
+    pub claim_id: u64,
+    pub version: u32,
+    pub old_status: ClaimStatus,
+    pub new_status: ClaimStatus,
+    pub at_ledger: u32,
+}
+
+pub fn emit_claim_status_changed(
+    env: &Env,
+    claim_id: u64,
+    old_status: ClaimStatus,
+    new_status: ClaimStatus,
+) {
+    ClaimStatusChangedData {
+        claim_id,
+        version: EVENT_SCHEMA_VERSION,
+        old_status,
+        new_status,
+        at_ledger: env.ledger().sequence(),
     }
     .publish(env);
 }

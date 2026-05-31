@@ -7,7 +7,7 @@ type StaffRole = 'admin' | 'support_readonly';
 
 export type AuthIdentity =
   | { kind: 'wallet'; walletAddress: string }
-  | { kind: 'staff'; staffId: string; email: string; role: StaffRole };
+  | { kind: 'staff'; staffId: string; email: string; role: StaffRole; scopes: string[] };
 
 type RequestWithIdentity = Request & {
   authIdentity?: AuthIdentity | null;
@@ -59,11 +59,17 @@ export class AuthIdentityService {
       typeof payload.email === 'string' &&
       (payload.role === 'admin' || payload.role === 'support_readonly')
     ) {
+      const rawScopes = Array.isArray(payload.scopes)
+        ? payload.scopes
+        : typeof payload.scope === 'string'
+          ? payload.scope.split(' ')
+          : [];
       return {
         kind: 'staff',
         staffId: payload.sub,
         email: payload.email,
         role: payload.role,
+        scopes: rawScopes.filter((scope): scope is string => typeof scope === 'string'),
       };
     }
 

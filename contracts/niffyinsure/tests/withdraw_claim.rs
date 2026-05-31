@@ -98,6 +98,10 @@ fn withdraw_emits_claim_withdrawn_event() {
         events_debug.contains("claim_withdrawn"),
         "withdrawal must emit claim_withdrawn"
     );
+    assert!(
+        events_debug.contains("claim_status_changed"),
+        "withdrawal must emit ClaimStatusChanged"
+    );
 }
 
 #[test]

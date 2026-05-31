@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { GraphQLModule } from '@nestjs/graphql';
 import type { Response } from 'express';
+import jwt from 'jsonwebtoken';
 import depthLimit from 'graphql-depth-limit';
 import { join } from 'path';
 import { AuthModule } from '../auth/auth.module';
@@ -24,6 +25,36 @@ import { PersistedQueryMiddleware } from './persisted-query.middleware';
 import { PolicyResolver } from './policy.resolver';
 import { VotePubSubService } from './vote-pubsub.service';
 import type { GraphqlRequest } from './graphql.context';
+
+export function authorizationFromConnectionParams(params: unknown): string | undefined {
+  if (!params || typeof params !== 'object') {
+    return undefined;
+  }
+
+  const record = params as Record<string, unknown>;
+  const value = record.Authorization ?? record.authorization;
+  return typeof value === 'string' ? value : undefined;
+}
+
+export function assertWalletJwt(config: ConfigService, authorization?: string): void {
+  if (!authorization?.startsWith('Bearer ')) {
+    throw new Error('Wallet authentication is required');
+  }
+
+  try {
+    const token = authorization.slice('Bearer '.length).trim();
+    const payload = jwt.verify(token, config.get<string>('JWT_SECRET') ?? '') as Record<
+      string,
+      unknown
+    >;
+    if (typeof payload.walletAddress === 'string' && payload.walletAddress.length > 0) {
+      return;
+    }
+  } catch {
+    // Normalise JWT parse/expiry/signature failures for the WebSocket handshake.
+  }
+  throw new Error('Wallet authentication is required');
+}
 
 @Module({
   imports: [
@@ -73,19 +104,31 @@ import type { GraphqlRequest } from './graphql.context';
             'graphql-ws': {
               path: graphqlPath,
               onConnect: async (ctx) => {
-                // Auth is enforced per-subscription via GraphqlWalletAuthGuard.
-                // Store connectionParams on context so guards can read the token.
+                const authorization = authorizationFromConnectionParams(ctx.connectionParams);
+                assertWalletJwt(config, authorization);
                 return { connectionParams: ctx.connectionParams };
               },
             },
           },
-          context: ({
-            req,
-            res,
-          }: {
-            req: GraphqlRequest;
-            res: Response;
-          }) => ({ req, res }),
+          context: (ctx: {
+            req?: GraphqlRequest;
+            res?: Response;
+            connectionParams?: unknown;
+            extra?: { request?: { headers?: Record<string, string | string[] | undefined> } };
+          }) => {
+            if (ctx.req) {
+              return { req: ctx.req, res: ctx.res };
+            }
+
+            const authorization = authorizationFromConnectionParams(ctx.connectionParams);
+            const req = {
+              headers: {
+                ...(ctx.extra?.request?.headers ?? {}),
+                ...(authorization ? { authorization } : {}),
+              },
+            } as GraphqlRequest;
+            return { req, res: undefined as unknown as Response };
+          },
           plugins,
           validationRules: [depthLimit(maxDepth)],
           formatError: formatGraphqlError,

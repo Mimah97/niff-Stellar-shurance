@@ -43,6 +43,8 @@ export class MetricsService implements OnModuleInit {
   readonly rpcErrorTotal: client.Counter<string>;
   /** result: hit | miss | bypass — quote simulation Redis cache */
   readonly quoteSimulationCacheTotal: client.Counter<string>;
+  /** result: hit | miss — claims board summary Redis cache */
+  readonly claimSummaryCacheTotal: client.Counter<string>;
 
   // ── Slow query metrics ────────────────────────────────────────────────────
   /** Total queries exceeding SLOW_QUERY_THRESHOLD_MS. */
@@ -55,6 +57,15 @@ export class MetricsService implements OnModuleInit {
   readonly dbPoolIdle: client.Gauge<string>;
   /** Number of requests waiting for a free connection. */
   readonly dbPoolWaiting: client.Gauge<string>;
+
+  // ── Indexer deduplication metrics ────────────────────────────────────────
+  /**
+   * Total duplicate events detected during indexing (upsert conflict hit).
+   * Labels:
+   *  - `event_type`: raw_event | vote
+   *  - `network`: Stellar network identifier
+   */
+  readonly indexerDuplicateEvents: client.Counter<string>;
 
   // ── Redis cache metrics ───────────────────────────────────────────────────
   /** Total cache hits by key namespace (policy, claim, idempotency, …). */
@@ -173,6 +184,13 @@ export class MetricsService implements OnModuleInit {
       registers: [this.registry],
     });
 
+    this.claimSummaryCacheTotal = new client.Counter({
+      name: 'claim_summary_cache_requests_total',
+      help: 'Claims board summary cache lookups',
+      labelNames: ['result'],
+      registers: [this.registry],
+    });
+
     this.slowQueriesTotal = new client.Counter({
       name: 'db_slow_queries_total',
       help: 'Total DB queries exceeding the slow query threshold',
@@ -194,6 +212,13 @@ export class MetricsService implements OnModuleInit {
     this.dbPoolWaiting = new client.Gauge({
       name: 'db_pool_waiting',
       help: 'Number of requests waiting for a free DB connection',
+      registers: [this.registry],
+    });
+
+    this.indexerDuplicateEvents = new client.Counter({
+      name: 'indexer_duplicate_events_total',
+      help: 'Total duplicate events detected during indexing (upsert conflict)',
+      labelNames: ['event_type', 'network'],
       registers: [this.registry],
     });
 
@@ -290,6 +315,10 @@ export class MetricsService implements OnModuleInit {
     this.quoteSimulationCacheTotal.inc({ result });
   }
 
+  recordClaimSummaryCache(result: 'hit' | 'miss') {
+    this.claimSummaryCacheTotal.inc({ result });
+  }
+
   recordIndexerLag(opts: { network: string; lag: number }) {
     this.indexerLag.set({ network: opts.network }, opts.lag);
   }
@@ -321,6 +350,10 @@ export class MetricsService implements OnModuleInit {
 
   recordRedisConnectionError() {
     this.redisConnectionErrors.inc();
+  }
+
+  recordDuplicateEvent(opts: { eventType: 'raw_event' | 'vote'; network: string }) {
+    this.indexerDuplicateEvents.inc({ event_type: opts.eventType, network: opts.network });
   }
 
   async getMetrics(): Promise<string> {

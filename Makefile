@@ -70,3 +70,10 @@ generate-client:
 # Usage: make check-env
 check-env:
 	npx ts-node scripts/check-env-local.ts
+
+# ── Env variable doc generator ────────────────────────────────────────────────
+# Generates backend/.env.example and backend/docs/environment-variables.md
+# from backend/src/config/env.definitions.ts.
+# Usage: make generate-env-docs
+generate-env-docs:
+	cd backend && npm run env:example:generate

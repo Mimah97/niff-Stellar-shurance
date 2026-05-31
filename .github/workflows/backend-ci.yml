@@ -126,9 +126,9 @@ jobs:
       - name: Audit npm dependencies (fail on high/critical)
         run: npm audit --audit-level=high --omit=dev
 
-  # ── 5. Env example drift guard ────────────────────────────────────────────────
+  # ── 5. Env example + docs drift guard ────────────────────────────────────────
   env-check:
-    name: .env.example drift
+    name: .env.example and env docs drift
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -145,7 +145,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check .env.example is up to date
+      - name: Check .env.example and docs/environment-variables.md are up to date
         run: npm run env:example:check
 
   # ── 6. Error catalog integrity ────────────────────────────────────────────────
