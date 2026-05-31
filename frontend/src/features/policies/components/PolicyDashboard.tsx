@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWallet } from '@/hooks/use-wallet';
 import { useLatestLedger } from '@/hooks/use-latest-ledger';
 import { getConfig } from '@/config/env';
 import { useOptimisticPolicies, PolicyConfirmationPoller } from '../hooks/useOptimisticPolicies';
+import { groupPoliciesByExpiry } from '../utils/policyGrouping';
 import { PolicyCard, PolicyRow } from './PolicyItem';
 import { PolicyListSkeleton, PolicyEmptyState, PolicyErrorState } from './PolicyStates';
 import { RenewModal } from './RenewModal';
@@ -31,8 +32,16 @@ export function PolicyDashboard() {
   const [renewTarget, setRenewTarget] = useState<PolicyDto | null>(null);
   const [terminateTarget, setTerminateTarget] = useState<PolicyDto | null>(null);
 
-  const { policies, total, pageIndex, hasNextPage, hasPrevPage, loading, error, goToPage, retry, applyOptimisticPolicy, mergedPolicies, entries: optimisticEntries, confirm: confirmOptimistic, rollback: rollbackOptimistic } =
+  const { total, pageIndex, hasNextPage, hasPrevPage, loading, error, goToPage, retry, applyOptimisticPolicy, mergedPolicies, entries: optimisticEntries, confirm: confirmOptimistic, rollback: rollbackOptimistic } =
     useOptimisticPolicies(address, network, status, sort);
+
+  const policyGroups = useMemo(() => groupPoliciesByExpiry(mergedPolicies), [mergedPolicies]);
+  const hasPolicies = mergedPolicies.length > 0;
+  const policySections = [
+    { key: 'active', title: 'Active policies', policies: policyGroups.active },
+    { key: 'expiringSoon', title: 'Expiring soon', policies: policyGroups.expiringSoon },
+    { key: 'expired', title: 'Expired policies', policies: policyGroups.expired },
+  ];
 
   const handleRenew = useCallback((policy: PolicyDto) => setRenewTarget(policy), []);
   const handleTerminate = useCallback((policy: PolicyDto) => setTerminateTarget(policy), []);
@@ -100,57 +109,78 @@ export function PolicyDashboard() {
         <PolicyListSkeleton layout={layout} />
       ) : error ? (
         <PolicyErrorState message={error} onRetry={retry} />
-      ) : policies.length === 0 ? (
+      ) : !hasPolicies ? (
         <PolicyEmptyState filter={status === 'all' ? 'all' : status} />
-      ) : layout === 'card' ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {mergedPolicies.map((p) => {
-            const entry = optimisticEntries.get(String(p.policy_id));
-            return (
-              <PolicyCard
-                key={`${p.holder}:${p.policy_id}`}
-                policy={p}
-                onRenew={handleRenew}
-                onTerminate={handleTerminate}
-                onFileClaim={handleFileClaim}
-                currentLedger={currentLedger}
-                optimisticStatus={entry?.status}
-                optimisticError={entry?.error}
-              />
-            );
-          })}
-        </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-              <tr>
-                <th className="px-4 py-3 text-left">Policy</th>
-                <th className="px-4 py-3 text-left">Status</th>
-                <th className="px-4 py-3 text-right">Coverage</th>
-                <th className="px-4 py-3 text-right">Premium / yr</th>
-                <th className="px-4 py-3 text-left">Expiry</th>
-                <th className="px-4 py-3 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mergedPolicies.map((p) => {
-                const entry = optimisticEntries.get(String(p.policy_id));
-                return (
-                  <PolicyRow
-                    key={`${p.holder}:${p.policy_id}`}
-                    policy={p}
-                    onRenew={handleRenew}
-                    onTerminate={handleTerminate}
-                    onFileClaim={handleFileClaim}
-                    currentLedger={currentLedger}
-                    optimisticStatus={entry?.status}
-                    optimisticError={entry?.error}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="space-y-10">
+          {policySections.map((section) =>
+            section.policies.length > 0 ? (
+              <section key={section.key} aria-labelledby={`${section.key}-heading`} className="space-y-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h2 id={`${section.key}-heading`} className="text-lg font-semibold text-gray-900">
+                      {section.title}
+                    </h2>
+                    <p className="text-sm text-gray-500">
+                      {section.policies.length} {section.policies.length === 1 ? 'policy' : 'policies'}
+                    </p>
+                  </div>
+                </div>
+
+                {layout === 'card' ? (
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {section.policies.map((p) => {
+                      const entry = optimisticEntries.get(String(p.policy_id));
+                      return (
+                        <PolicyCard
+                          key={`${p.holder}:${p.policy_id}`}
+                          policy={p}
+                          onRenew={handleRenew}
+                          onTerminate={handleTerminate}
+                          onFileClaim={handleFileClaim}
+                          currentLedger={currentLedger}
+                          optimisticStatus={entry?.status}
+                          optimisticError={entry?.error}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-lg border border-gray-200">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                        <tr>
+                          <th className="px-4 py-3 text-left">Policy</th>
+                          <th className="px-4 py-3 text-left">Status</th>
+                          <th className="px-4 py-3 text-right">Coverage</th>
+                          <th className="px-4 py-3 text-right">Premium / yr</th>
+                          <th className="px-4 py-3 text-left">Expiry</th>
+                          <th className="px-4 py-3 text-left">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {section.policies.map((p) => {
+                          const entry = optimisticEntries.get(String(p.policy_id));
+                          return (
+                            <PolicyRow
+                              key={`${p.holder}:${p.policy_id}`}
+                              policy={p}
+                              onRenew={handleRenew}
+                              onTerminate={handleTerminate}
+                              onFileClaim={handleFileClaim}
+                              currentLedger={currentLedger}
+                              optimisticStatus={entry?.status}
+                              optimisticError={entry?.error}
+                            />
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            ) : null,
+          )}
         </div>
       )}
 
