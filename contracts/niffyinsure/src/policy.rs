@@ -294,9 +294,13 @@ pub fn initiate_policy(
     // Check granular pause: policy binding should be blocked if bind_paused
     storage::assert_bind_not_paused(env);
 
-    // Validate metadata_uri is non-empty
-    if metadata_uri.is_empty() {
-        return Err(PolicyError::InvalidMetadataUri);
+    // Policy type registry check: if the registry is enabled, the requested type
+    // must be registered and active. If the registry has never been used, all types
+    // are allowed for backward compatibility with pre-registry deployments.
+    if storage::is_policy_type_registry_enabled(env)
+        && !storage::is_policy_type_active(env, &policy_type)
+    {
+        return Err(PolicyError::AssetNotAllowed);
     }
 
     // Asset allowlist check — before auth so callers get a clear error.

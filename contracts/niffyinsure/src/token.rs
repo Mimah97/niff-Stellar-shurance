@@ -69,3 +69,19 @@ pub fn sweep_asset(env: &Env, asset: &Address, recipient: &Address, amount: i128
     let client = token::TokenClient::new(env, asset);
     client.transfer(&env.current_contract_address(), recipient, &amount);
 }
+
+/// Draw `amount` of `asset` from the reinsurance pool contract to `recipient`.
+/// Uses transfer_from so the reinsurance contract must have approved this contract.
+pub(crate) fn transfer_from_reinsurance(
+    env: &Env,
+    asset: &Address,
+    reinsurance: &Address,
+    recipient: &Address,
+    amount: i128,
+) {
+    if !crate::storage::is_allowed_asset(env, asset) {
+        panic!("token not allowlisted");
+    }
+    let client = token::TokenClient::new(env, asset);
+    client.transfer_from(&env.current_contract_address(), reinsurance, recipient, &amount);
+}

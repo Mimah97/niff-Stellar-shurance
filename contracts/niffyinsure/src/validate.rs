@@ -71,8 +71,16 @@ pub enum Error {
     RollingClaimCapExceeded = 54,
     /// Keeper `process_payout_timeout` called before the approved payout deadline elapsed.
     PayoutDeadlineNotReached = 55,
-    /// Admin dispute window is still active; payout cannot execute yet.
-    DisputeWindowActive = 56,
+    /// Claim amount is below the asset-specific minimum (issue #587).
+    ClaimBelowMinAmount = 56,
+    /// Claim amount exceeds the asset-specific maximum (issue #587).
+    ClaimAboveMaxAmount = 57,
+    /// Delegation not found or expired (issue #585).
+    DelegationInvalid = 58,
+    /// Operator lacks the required permission for this action (issue #585).
+    DelegationPermissionDenied = 59,
+    /// Primary treasury insufficient and no reinsurance configured (issue #581).
+    NoReinsuranceConfigured = 60,
 }
 
 pub fn validate_quorum_bps(bps: u32) -> Result<(), Error> {

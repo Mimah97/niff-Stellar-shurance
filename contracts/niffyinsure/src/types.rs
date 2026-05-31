@@ -781,3 +781,58 @@ pub struct ParametricClaim {
     pub resolved_ledger: u32,
 }
 // Implementation complete
+
+// ── Issue #587: Asset-specific claim amount bounds ────────────────────────────
+
+/// Per-asset minimum and maximum claim amount configuration.
+/// Prevents dust claims (below min) and over-coverage claims (above max).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AllowedAssetConfig {
+    /// Minimum claim amount in asset units. Claims below this revert.
+    pub min_claim_amount: i128,
+    /// Maximum claim amount in asset units. Claims above this revert.
+    pub max_claim_amount: i128,
+}
+
+// ── Issue #585: Admin role delegation ────────────────────────────────────────
+
+/// Permission flags for a delegated operator.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegationPermissions {
+    /// Operator may call set_claim_fraud_score.
+    pub can_set_fraud_score: bool,
+    /// Operator may call set_allowed_asset_config.
+    pub can_set_asset_config: bool,
+    /// Operator may call set_reinsurance_contract.
+    pub can_set_reinsurance: bool,
+}
+
+/// On-chain delegation record stored per operator address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegationRecord {
+    /// The admin who granted this delegation.
+    pub grantor: Address,
+    /// Ledger sequence after which this delegation is no longer valid.
+    pub expiry_ledger: u32,
+    /// Permissions granted to the operator.
+    pub permissions: DelegationPermissions,
+}
+
+// ── Issue #581: Reinsurance pool events ──────────────────────────────────────
+
+/// Emitted when reinsurance funds are drawn to cover a claim shortfall.
+#[contractevent(topics = ["niffyinsure", "reinsurance_drawdown"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReinsuranceDrawdown {
+    #[topic]
+    pub claim_id: u64,
+    /// Amount paid from the primary treasury.
+    pub primary_amount: i128,
+    /// Amount drawn from the reinsurance pool.
+    pub reinsurance_amount: i128,
+    /// Reinsurance contract address used.
+    pub reinsurance_contract: Address,
+}
