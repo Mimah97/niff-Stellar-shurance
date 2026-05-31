@@ -128,6 +128,10 @@ pub const APPEAL_VOTE_WINDOW_LEDGERS: u32 = 7 * LEDGERS_PER_DAY; // 120_960
 /// Claimants get exactly one appeal after a Rejected outcome.
 pub const MAX_APPEALS_PER_CLAIM: u32 = 1;
 
+/// Dispute window after finalization: ~1 day. Admin may dispute approved claims
+/// during this window to freeze payout and set status to Disputed for review.
+pub const DEFAULT_DISPUTE_WINDOW_LEDGERS: u32 = LEDGERS_PER_DAY; // 17_280
+
 // ── Core window helpers ───────────────────────────────────────────────────────
 
 /// Returns `true` if `now` falls in the half-open interval `[start, end)`.

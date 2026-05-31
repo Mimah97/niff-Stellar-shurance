@@ -442,6 +442,13 @@ impl NiffyInsure {
         claim::process_claim(&env, claim_id)
     }
 
+    /// Admin-only: dispute an approved claim during the dispute window.
+    pub fn admin_dispute_claim(env: Env, claim_id: u64) -> Result<(), validate::Error> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        claim::dispute_claim(&env, claim_id)
+    }
+
     pub fn get_claim(env: Env, claim_id: u64) -> Result<types::Claim, validate::Error> {
         claim::get_claim(&env, claim_id)
     }
@@ -556,6 +563,7 @@ impl NiffyInsure {
             opts.beneficiary,
             opts.deductible,
             opts.expected_nonce,
+            opts.metadata_uri,
         )
     }
 
@@ -567,6 +575,18 @@ impl NiffyInsure {
         beneficiary: Option<Address>,
     ) -> Result<(), policy::PolicyError> {
         policy::set_beneficiary(&env, holder, policy_id, beneficiary)
+    }
+
+    /// Admin-only: update the policy metadata URI.
+    pub fn admin_update_policy_metadata_uri(
+        env: Env,
+        holder: Address,
+        policy_id: u32,
+        new_uri: soroban_sdk::String,
+    ) -> Result<(), policy::PolicyError> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        policy::update_policy_metadata_uri(&env, holder, policy_id, new_uri)
     }
 
     /// Read-only: retrieve a persisted policy by (holder, policy_id).

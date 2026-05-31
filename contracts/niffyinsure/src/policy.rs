@@ -30,8 +30,8 @@ pub enum PolicyError {
     LedgerOverflow = 105,
     /// Policy struct failed internal validation.
     PolicyValidation = 106,
-    /// Deductible missing, negative, or greater than coverage cap.
-    InvalidDeductible = 120,
+    /// Invalid or empty metadata URI.
+    InvalidMetadataUri = 121,
     /// Caller is not authorized.
     Unauthorized = 107,
     /// Age out of range (1..=120).
@@ -96,6 +96,18 @@ pub struct BeneficiaryUpdated {
     pub policy_id: u32,
     pub old_beneficiary: Option<Address>,
     pub new_beneficiary: Option<Address>,
+}
+
+/// Emitted when the policy metadata URI is updated.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyMetadataUpdated {
+    #[topic]
+    pub holder: Address,
+    #[topic]
+    pub policy_id: u32,
+    pub old_uri: String,
+    pub new_uri: String,
 }
 
 /// Event emitted by `renew_policy`.
@@ -277,6 +289,7 @@ pub fn initiate_policy(
     beneficiary: Option<Address>,
     deductible: Option<i128>,
     expected_nonce: Option<u64>,
+    metadata_uri: String,
 ) -> Result<Policy, PolicyError> {
     // Check granular pause: policy binding should be blocked if bind_paused
     storage::assert_bind_not_paused(env);
@@ -372,6 +385,7 @@ pub fn initiate_policy(
         termination_reason: crate::types::TerminationReason::None,
         terminated_by_admin: false,
         strike_count: 0,
+        metadata_uri,
     };
 
     validate::check_policy(&policy).map_err(|_| PolicyError::PolicyValidation)?;
@@ -438,6 +452,39 @@ pub fn set_beneficiary(
         policy_id,
         old_beneficiary,
         new_beneficiary,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Admin-only: update the policy metadata URI. Must be non-empty.
+pub fn update_policy_metadata_uri(
+    env: &Env,
+    holder: Address,
+    policy_id: u32,
+    new_uri: String,
+) -> Result<(), PolicyError> {
+    // Validate new_uri is non-empty
+    if new_uri.is_empty() {
+        return Err(PolicyError::InvalidMetadataUri);
+    }
+
+    let mut policy = storage::get_policy(env, &holder, policy_id).ok_or(PolicyError::NotFound)?;
+
+    let old_uri = policy.metadata_uri.clone();
+    if old_uri == new_uri {
+        return Ok(());
+    }
+
+    policy.metadata_uri = new_uri.clone();
+    storage::set_policy(env, &holder, policy_id, &policy);
+
+    PolicyMetadataUpdated {
+        holder: holder.clone(),
+        policy_id,
+        old_uri,
+        new_uri,
     }
     .publish(env);
 

@@ -156,6 +156,8 @@ pub enum ClaimStatus {
     AppealRejected,
     /// Claimant withdrew before voting began; record kept for audit; no payout.
     Withdrawn,
+    /// Admin disputed the claim after approval; payout is frozen pending review.
+    Disputed,
     /// RESERVED — appeal in progress; not yet implemented.
     ///
     /// This variant is declared to **reserve the discriminant** in the on-chain
@@ -203,7 +205,8 @@ impl ClaimStatus {
                 | ClaimStatus::Rejected
                 | ClaimStatus::AppealApproved
                 | ClaimStatus::AppealRejected
-                | ClaimStatus::Withdrawn // NOTE: ClaimStatus::Appealed is intentionally absent — an appeal
+                | ClaimStatus::Withdrawn
+                | ClaimStatus::Disputed // NOTE: ClaimStatus::Appealed is intentionally absent — an appeal
                                          // in progress is NOT terminal.  Adding it here would allow
                                          // process_claim / finalize_claim to close an appealed claim without
                                          // resolving the appeal round, which would be incorrect.
@@ -379,6 +382,8 @@ pub struct InitiatePolicyOptions {
     /// Opt-in replay-protection nonce. Pass `None` to skip the check.
     /// Supplementary to Stellar sequence numbers — not a replacement.
     pub expected_nonce: Option<u64>,
+    /// Off-chain URI to the policy governing document. Must be non-empty.
+    pub metadata_uri: String,
 }
 
 #[contracttype]
@@ -498,6 +503,9 @@ pub struct Policy {
     /// readable via `get_policy`. It carries only a count — no allegation
     /// narratives, no claimant-identifying data.
     pub strike_count: u32,
+    /// Off-chain URI to the policy governing document.
+    /// Must be non-empty at policy creation. Admin can update via `update_policy_metadata_uri`.
+    pub metadata_uri: String,
 }
 
 /// Return value of [`crate::policy::renew_policy`].
@@ -561,6 +569,10 @@ pub struct Claim {
     /// [`CLAIM_STATUS_HISTORY_MAX`]; on overflow the oldest entries are removed.
     /// May be incomplete if the cap is exceeded; `status` is authoritative.
     pub status_history: Vec<ClaimStatusHistoryEntry>,
+    /// Ledger by which admin must dispute the claim (set after finalization).
+    /// After this ledger passes, payout executes automatically for approved claims.
+    /// Set to 0 if no dispute window is active.
+    pub dispute_deadline_ledger: u32,
 }
 
 /// Per-policy rolling window accumulator for **paid** claim amounts (same ledger window for all policies).
