@@ -82,6 +82,7 @@ export interface EnvironmentVariables {
   GRAPHQL_RATE_LIMIT_WINDOW_MS: number;
   GRAPHQL_SLOW_OPERATION_MS: number;
   GRAPHQL_PERSISTED_QUERIES_ENABLED: boolean;
+  GRAPHQL_PERSISTED_QUERIES_ONLY: boolean;
   GRAPHQL_PERSISTED_QUERY_TTL_SECONDS: number;
   GRAPHQL_POLICY_CLAIMS_DEFAULT_LIMIT: number;
   GRAPHQL_POLICY_CLAIMS_MAX_LIMIT: number;
@@ -879,6 +880,14 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     key: 'GRAPHQL_PERSISTED_QUERIES_ENABLED',
     section: 'GraphQL',
     description: 'Enable Apollo-style automatic persisted queries.',
+    example: 'false',
+    required: 'required',
+    schema: Joi.boolean().default(false),
+  },
+  GRAPHQL_PERSISTED_QUERIES_ONLY: {
+    key: 'GRAPHQL_PERSISTED_QUERIES_ONLY',
+    section: 'GraphQL',
+    description: 'Restrict production to pre-approved query hashes. When true, requests without an allowlisted sha256Hash are rejected. Set to false in development to allow arbitrary queries.',
     example: 'false',
     required: 'required',
     schema: Joi.boolean().default(false),

@@ -36,7 +36,9 @@
     "env:example:check": "ts-node scripts/check-env-example.ts",
     "secrets:generate:jwt": "ts-node scripts/generate-jwt-key.ts",
     "ops:replay-indexer": "ts-node scripts/replay-indexer.ts",
-    "export-spec": "ts-node -P tsconfig.json scripts/export-spec.ts"
+    "export-spec": "ts-node -P tsconfig.json scripts/export-spec.ts",
+    "allowlist:generate": "ts-node scripts/generate-persisted-query-allowlist.ts",
+    "allowlist:check": "npm run allowlist:generate && git diff --exit-code src/graphql/persisted-query-allowlist.json"
   },
   "dependencies": {
     "@apollo/server": "^4.11.0",
