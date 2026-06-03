@@ -170,7 +170,35 @@ jobs:
       - name: Check error codes are unique and documented
         run: npm run error-catalog:check
 
-  # ── 7. No legacy imports guard ────────────────────────────────────────────────
+  # ── 7. Persisted query allowlist drift guard ─────────────────────────────────
+  allowlist-drift:
+    name: Persisted query allowlist drift
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate allowlist and check for drift
+        run: |
+          npm run allowlist:generate
+          if ! git diff --exit-code src/graphql/persisted-query-allowlist.json; then
+            echo "::error::persisted-query-allowlist.json is out of date."
+            echo "::error::Run 'npm run allowlist:generate' in the backend directory and commit the result."
+            exit 1
+          fi
+
+  # ── 8. No legacy imports guard ────────────────────────────────────────────────
   no-legacy-imports:
     name: No legacy imports
     runs-on: ubuntu-latest
