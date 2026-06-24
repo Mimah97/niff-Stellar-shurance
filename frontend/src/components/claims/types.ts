@@ -6,6 +6,9 @@ export type { ClaimBoard };
 // Board-level claim status values used in filters (distinct from on-chain ClaimStatus)
 export type BoardClaimStatus = "open" | "closed" | "pending";
 
+/** Sort order for the Claims Board */
+export type ClaimSortOrder = "newest" | "oldest" | "most_votes" | "deadline";
+
 /** Active filter state for the Claims Board (Req 5.1) */
 export interface ClaimFilters {
   status: BoardClaimStatus | "all";
@@ -13,6 +16,7 @@ export interface ClaimFilters {
   submittedAfter: string | null; // ISO-8601 date string
   submittedBefore: string | null; // ISO-8601 date string
   needsMyVote: boolean; // only active when JWT present (Req 4.1)
+  sort: ClaimSortOrder;
 }
 
 /** Paginated API response for claims (Req 1.2) */
@@ -38,8 +42,18 @@ export const FILTER_QUERY_PARAMS = {
   submittedAfter: "after",
   submittedBefore: "before",
   needsMyVote: "needs_my_vote",
+  sort: "sort",
   page: "page",
 } as const satisfies Record<keyof ClaimFilters | "page", string>;
+
+export const VALID_SORT_ORDERS = new Set<string>([
+  "newest",
+  "oldest",
+  "most_votes",
+  "deadline",
+]);
+
+export const CLAIMS_SORT_STORAGE_KEY = "claims_board_sort";
 
 /** Default filter state */
 export const DEFAULT_FILTERS: ClaimFilters = {
@@ -48,4 +62,5 @@ export const DEFAULT_FILTERS: ClaimFilters = {
   submittedAfter: null,
   submittedBefore: null,
   needsMyVote: false,
+  sort: "newest",
 };
