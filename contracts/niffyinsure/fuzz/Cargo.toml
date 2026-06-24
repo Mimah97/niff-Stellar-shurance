@@ -1,0 +1,40 @@
+[package]
+name = "niffyinsure-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Opt out of the parent workspace so this crate is only built by cargo-fuzz
+# (which uses nightly) and not by the stable workspace CI.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+niffyinsure = { path = "..", features = ["testutils"] }
+soroban-sdk = { version = "=25.3.1", features = ["testutils"] }
+
+# Disable LTO and optimization for faster fuzz builds; libFuzzer adds its own.
+[profile.release]
+opt-level = 1
+debug = true
+
+[[bin]]
+name = "fuzz_file_claim"
+path = "fuzz_targets/fuzz_file_claim.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_initiate_policy"
+path = "fuzz_targets/fuzz_initiate_policy.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_finalize_claim"
+path = "fuzz_targets/fuzz_finalize_claim.rs"
+test = false
+doc = false
