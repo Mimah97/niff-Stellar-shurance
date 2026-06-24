@@ -134,6 +134,34 @@ export interface EnvironmentVariables {
   EVIDENCE_UPLOAD_RATE_LIMIT: number;
   /** Evidence upload rate-limit window in seconds. */
   EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
+  /**
+   * Loki (or any Loki-compatible) push endpoint for centralised log shipping.
+   * When set, the Winston logger ships structured JSON logs to this URL in addition
+   * to the console. Leave empty to disable remote log shipping.
+   * Example: http://loki:3100/loki/api/v1/push
+   */
+  LOG_SHIPPING_URL: string;
+  /**
+   * Bearer token sent in the Authorization header when pushing logs to Loki.
+   * Required when the Loki endpoint is protected by authentication.
+   */
+  LOG_SHIPPING_AUTH_TOKEN: string;
+  /**
+   * How often (in milliseconds) the log shipper flushes its in-memory buffer
+   * to the remote aggregation endpoint. Defaults to 5000 (5 s).
+   */
+  LOG_SHIPPING_FLUSH_INTERVAL_MS: number;
+  /**
+   * Maximum log entries held in the shipper's in-memory buffer before a flush
+   * is triggered regardless of the interval. Defaults to 100.
+   */
+  LOG_SHIPPING_BATCH_SIZE: number;
+  /**
+   * Log retention period in days communicated to the aggregation system via
+   * the X-Scope-OrgID / label set. Informational only — actual retention is
+   * configured in the Loki / aggregator deployment.
+   */
+  LOG_RETENTION_DAYS: number;
 }
 
 export type EnvKey = keyof EnvironmentVariables;
@@ -1261,6 +1289,54 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: '3600',
     required: 'optional',
     schema: Joi.number().integer().min(1).default(3600),
+  },
+  LOG_SHIPPING_URL: {
+    key: 'LOG_SHIPPING_URL',
+    section: 'Log aggregation',
+    description:
+      'Loki-compatible push endpoint for centralised log shipping. ' +
+      'When set, Winston ships structured JSON logs to this URL in addition to the console. ' +
+      'Leave empty to disable. Example: http://loki:3100/loki/api/v1/push',
+    example: '',
+    required: 'optional',
+    schema: Joi.string().uri().allow('').default(''),
+  },
+  LOG_SHIPPING_AUTH_TOKEN: {
+    key: 'LOG_SHIPPING_AUTH_TOKEN',
+    section: 'Log aggregation',
+    description:
+      'Bearer token sent in the Authorization header when pushing logs to the aggregation endpoint.',
+    example: '',
+    required: 'optional',
+    secret: true,
+    schema: Joi.string().allow('').default(''),
+  },
+  LOG_SHIPPING_FLUSH_INTERVAL_MS: {
+    key: 'LOG_SHIPPING_FLUSH_INTERVAL_MS',
+    section: 'Log aggregation',
+    description: 'Milliseconds between log buffer flushes to the remote aggregation endpoint.',
+    example: '5000',
+    required: 'optional',
+    schema: Joi.number().integer().min(500).default(5000),
+  },
+  LOG_SHIPPING_BATCH_SIZE: {
+    key: 'LOG_SHIPPING_BATCH_SIZE',
+    section: 'Log aggregation',
+    description:
+      'Maximum log entries buffered before a flush is forced regardless of the interval.',
+    example: '100',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(100),
+  },
+  LOG_RETENTION_DAYS: {
+    key: 'LOG_RETENTION_DAYS',
+    section: 'Log aggregation',
+    description:
+      'Intended log retention period in days. Informational label sent to the aggregator — ' +
+      'actual retention is enforced by the Loki deployment configuration.',
+    example: '30',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(30),
   },
 };
 
