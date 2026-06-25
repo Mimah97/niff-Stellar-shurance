@@ -58,5 +58,8 @@ jobs:
       - name: Test
         run: cargo test --workspace --features testutils
 
+      - name: Gas benchmarks
+        run: cargo test --test gas_benchmarks --features testutils -- --nocapture
+
       - name: Build WASM
         run: cargo build --release --target wasm32v1-none --workspace
