@@ -42,6 +42,16 @@ export interface Policy {
    * Omitted or null means payouts go to the holder.
    */
   beneficiary?: string | null;
+  /**
+   * Off-chain URI to the policy governing document (e.g. IPFS CID).
+   * Populated from on-chain metadata_uri field.
+   */
+  metadata_uri?: string;
+  /**
+   * Hex-encoded SHA-256 hash of the off-chain policy document.
+   * Used for verification against the content at metadata_uri.
+   */
+  terms_hash?: string;
 }
 
 /** On-chain Claim record (internal representation). */

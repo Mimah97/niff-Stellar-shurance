@@ -32,6 +32,8 @@ export const PolicyDtoSchema = z.object({
     avg_ledger_close_seconds: z.literal(5),
   }),
   beneficiary: z.string().nullable().optional(),
+  metadata_uri: z.string().optional(),
+  terms_hash: z.string().optional(),
   claims: z.array(ClaimSummaryDtoSchema),
   _link: z.string(),
 });

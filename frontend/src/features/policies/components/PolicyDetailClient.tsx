@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Clock, FileText, Shield } from 'lucide-react'
 
+import { PolicyMetadataUriViewer } from '@/components/policies/PolicyMetadataUriViewer'
 import { useWallet } from '@/features/wallet'
 import { RenewModal } from './RenewModal'
 import { TerminateModal } from './TerminateModal'
@@ -128,6 +129,13 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
           )}
         </CardContent>
       </Card>
+
+      {policy.metadata_uri && (
+        <PolicyMetadataUriViewer
+          metadataUri={policy.metadata_uri}
+          termsHash={policy.terms_hash}
+        />
+      )}
 
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" />Expiry Countdown</CardTitle></CardHeader>
