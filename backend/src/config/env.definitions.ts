@@ -13,6 +13,7 @@ export interface EnvironmentVariables {
   REDIS_URL: string;
   STELLAR_NETWORK: StellarNetwork;
   SOROBAN_RPC_URL: string;
+  SOROBAN_SIMULATE_TIMEOUT_MS: number;
   HORIZON_URL: string;
   STELLAR_NETWORK_PASSPHRASE: string;
   CONTRACT_ID: string;
@@ -66,11 +67,15 @@ export interface EnvironmentVariables {
   TENANT_RESOLUTION_ENABLED: boolean;
   TENANT_BASE_DOMAIN: string;
   DATA_RETENTION_DAYS: number;
+  INDEXER_RETENTION_DAYS: number;
   DB_POOL_MAX: number;
   DB_POOL_MIN: number;
   DB_POOL_IDLE_TIMEOUT_MS: number;
   DB_POOL_CONNECTION_TIMEOUT_MS: number;
   DB_SLOW_QUERY_MS: number;
+  DB_CONNECT_MAX_ATTEMPTS: number;
+  DB_CONNECT_INITIAL_DELAY_MS: number;
+  DB_CONNECT_MAX_DELAY_MS: number;
   GRAPHQL_ENABLED: boolean;
   GRAPHQL_PATH: string;
   GRAPHQL_INTROSPECTION_IN_PRODUCTION: boolean;
@@ -109,6 +114,10 @@ export interface EnvironmentVariables {
   SOLVENCY_TENANT_ID: string;
   SOLVENCY_ALERT_WEBHOOK_URL: string;
   SOLVENCY_ALERT_WEBHOOK_SECRET: string;
+  IPFS_PIN_CHECK_ENABLED: string;
+  IPFS_PIN_CHECK_CRON: string;
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_URL: string;
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_SECRET: string;
   WASM_DRIFT_WEBHOOK_URL: string;
   WASM_DRIFT_WEBHOOK_SECRET: string;
   DEPLOYMENT_REGISTRY_PATH: string;
@@ -307,6 +316,14 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: 'https://soroban-testnet.stellar.org',
     required: 'required',
     schema: Joi.string().uri().required(),
+  },
+  SOROBAN_SIMULATE_TIMEOUT_MS: {
+    key: 'SOROBAN_SIMULATE_TIMEOUT_MS',
+    section: 'Stellar',
+    description: 'Max ms to wait for simulate_transaction before returning 504 (issue #895).',
+    example: '30000',
+    required: 'required',
+    schema: Joi.number().integer().min(1000).default(30_000),
   },
   HORIZON_URL: {
     key: 'HORIZON_URL',
@@ -790,6 +807,14 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     required: 'required',
     schema: Joi.number().integer().min(1).default(730),
   },
+  INDEXER_RETENTION_DAYS: {
+    key: 'INDEXER_RETENTION_DAYS',
+    section: 'Operations',
+    description: 'Days to keep RawEvent and inactive LedgerCursor rows before pruning (issue #897).',
+    example: '90',
+    required: 'required',
+    schema: Joi.number().integer().min(1).default(90),
+  },
   DB_POOL_MAX: {
     key: 'DB_POOL_MAX',
     section: 'Database',
@@ -829,6 +854,30 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: '250',
     required: 'required',
     schema: Joi.number().integer().min(10).default(250),
+  },
+  DB_CONNECT_MAX_ATTEMPTS: {
+    key: 'DB_CONNECT_MAX_ATTEMPTS',
+    section: 'Database',
+    description: 'Max $connect() attempts with exponential backoff before startup fails (issue #894).',
+    example: '5',
+    required: 'required',
+    schema: Joi.number().integer().min(1).default(5),
+  },
+  DB_CONNECT_INITIAL_DELAY_MS: {
+    key: 'DB_CONNECT_INITIAL_DELAY_MS',
+    section: 'Database',
+    description: 'Initial retry delay in ms for DB connection backoff (doubles each attempt).',
+    example: '500',
+    required: 'required',
+    schema: Joi.number().integer().min(100).default(500),
+  },
+  DB_CONNECT_MAX_DELAY_MS: {
+    key: 'DB_CONNECT_MAX_DELAY_MS',
+    section: 'Database',
+    description: 'Maximum retry delay cap in ms for DB connection backoff.',
+    example: '30000',
+    required: 'required',
+    schema: Joi.number().integer().min(1000).default(30_000),
   },
   GRAPHQL_ENABLED: {
     key: 'GRAPHQL_ENABLED',
@@ -1138,6 +1187,40 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     key: 'SOLVENCY_ALERT_WEBHOOK_SECRET',
     section: 'Operations',
     description: 'Shared secret sent with solvency alert webhooks.',
+    example: '',
+    required: 'optional',
+    secret: true,
+    schema: Joi.string().allow('').default(''),
+  },
+  IPFS_PIN_CHECK_ENABLED: {
+    key: 'IPFS_PIN_CHECK_ENABLED',
+    section: 'Operations',
+    description: 'Enable the scheduled IPFS pinning status check job (issue #896).',
+    example: 'true',
+    required: 'optional',
+    schema: Joi.string().allow('').default('true'),
+  },
+  IPFS_PIN_CHECK_CRON: {
+    key: 'IPFS_PIN_CHECK_CRON',
+    section: 'Operations',
+    description: 'Cron expression for the IPFS pin check job (default: 02:00 daily).',
+    example: '0 2 * * *',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_URL: {
+    key: 'IPFS_PIN_CHECK_ALERT_WEBHOOK_URL',
+    section: 'Operations',
+    description: 'Webhook URL for ops alerts when a CID is no longer pinned.',
+    example: '',
+    required: 'optional',
+    secret: true,
+    schema: Joi.string().uri().allow('').default(''),
+  },
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_SECRET: {
+    key: 'IPFS_PIN_CHECK_ALERT_WEBHOOK_SECRET',
+    section: 'Operations',
+    description: 'Shared secret sent with IPFS pin check alert webhooks.',
     example: '',
     required: 'optional',
     secret: true,
