@@ -32,7 +32,7 @@ import { AuditService } from './audit.service';
 import { ReindexDto } from './dto/reindex.dto';
 import { BackfillDto } from './dto/backfill.dto';
 import { AuditQueryDto } from './dto/audit-query.dto';
-import { FeatureFlagDto } from './dto/feature-flag.dto';
+import { BulkFeatureFlagDto, FeatureFlagDto } from './dto/feature-flag.dto';
 import { SetRateLimitDto, EnableOverrideDto } from './dto/rate-limit.dto';
 import { PrivacyService, PrivacyRequestType } from '../maintenance/privacy.service';
 import { RateLimitService } from '../rate-limit/rate-limit.service';
@@ -539,6 +539,32 @@ export class AdminController {
       ipAddress: req.ip,
     });
     return flag;
+  }
+
+  /**
+   * POST /admin/feature-flags/bulk
+   *
+   * Applies an array of {key, enabled} updates atomically within a single DB
+   * transaction. All keys must be in the predefined allowlist — the request is
+   * rejected in full if any key is unknown. One audit row is written for the
+   * entire batch.
+   */
+  @Post('feature-flags/bulk')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Bulk-update feature flags atomically (allowlisted keys only)' })
+  async bulkSetFeatureFlags(@Body() dto: BulkFeatureFlagDto, @Req() req: AdminRequest) {
+    const actor = req.user?.walletAddress ?? 'unknown';
+    const results = await this.adminService.bulkSetFeatureFlags(dto.updates, actor);
+    await this.auditService.write({
+      actor,
+      action: 'feature_flag_bulk_update',
+      payload: {
+        updates: dto.updates as unknown as Prisma.InputJsonValue,
+        count: dto.updates.length,
+      },
+      ipAddress: req.ip,
+    });
+    return { updated: results };
   }
 
   /**
