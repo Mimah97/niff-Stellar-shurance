@@ -1238,6 +1238,83 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
     return { txHash, ledger, onChainStatus };
   }
 
+  // ── #928 Voting Duration ───────────────────────────────────────────────────
+
+  async simulateGetVotingDuration({ sourceAccount }: { sourceAccount: string }): Promise<VotingDuration> {
+    return this.trackRpc('simulateGetVotingDuration', async () => {
+      const server = this.makeServer();
+      const account = await this.loadAccount(server, sourceAccount);
+      const contract = new Contract(this.contractId);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(contract.call('get_voting_duration_ledgers'))
+        .setTimeout(30)
+        .build();
+      const result = await server.simulateTransaction(tx);
+      if (Api.isSimulationError(result)) {
+        throw new BadRequestException({ code: 'SIMULATION_FAILED', message: result.error });
+      }
+      const raw = result.result?.retval;
+      if (!raw) throw new BadRequestException({ code: 'SIMULATION_EMPTY', message: 'Empty simulation result' });
+      const ledgers = Number(scValToNative(raw));
+      return { votingDurationLedgers: ledgers };
+    });
+  }
+
+  private async submitKeeperTx(
+    operation: xdr.Operation,
+    label: string,
+  ): Promise<KeeperActionResult> {
+    const keeperPublic = this.configService.get<string>('CLAIM_KEEPER_SOURCE_ACCOUNT');
+    const keeperSecret = this.configService.get<string>('CLAIM_KEEPER_SECRET_KEY');
+    if (!keeperPublic || !keeperSecret) {
+      throw new BadRequestException({ code: 'KEEPER_NOT_CONFIGURED', message: `Keeper account not configured (${label})` });
+    }
+    const keypair = Keypair.fromSecret(keeperSecret);
+    const server = this.makeServer();
+    const account = await this.loadAccount(server, keeperPublic);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+    const simResult = await server.simulateTransaction(tx);
+    if (Api.isSimulationError(simResult)) {
+      throw new BadRequestException({ code: 'SIMULATION_FAILED', message: simResult.error });
+    }
+    const assembled = assembleTransaction(tx, simResult).build();
+    assembled.sign(keypair);
+    const send = await server.sendTransaction(assembled);
+    if (send.status === 'ERROR') {
+      throw new BadRequestException({ code: 'TX_SEND_FAILED', message: JSON.stringify(send.errorResult) });
+    }
+    const deadline = Date.now() + 30_000;
+    let poll = await server.getTransaction(send.hash);
+    while (poll.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND && Date.now() < deadline) {
+      await new Promise<void>((r) => setTimeout(r, 2_000));
+      poll = await server.getTransaction(send.hash);
+    }
+    if (poll.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      throw new BadRequestException({ code: 'TX_FAILED', message: `${label} transaction status: ${poll.status}` });
+    }
+    return { txHash: send.hash, ledger: (poll as SorobanRpc.Api.GetSuccessfulTransactionResponse).ledger };
+  }
+
+  async invokeAdminSetVotingDuration({ ledgers }: { ledgers: number }): Promise<KeeperActionResult> {
+    return this.trackRpc('invokeAdminSetVotingDuration', async () => {
+      const contract = new Contract(this.contractId);
+      const operation = contract.call(
+        'admin_set_vote_duration_ledgers',
+        nativeToScVal(ledgers, { type: 'u32' }),
+      );
+      return this.submitKeeperTx(operation, 'admin_set_vote_duration_ledgers');
+    });
+  }
+
   /**
    * Build unsigned batch_register_voter transaction.
    * Signature: batch_register_voter(admin, voters: Vec<Address>)
