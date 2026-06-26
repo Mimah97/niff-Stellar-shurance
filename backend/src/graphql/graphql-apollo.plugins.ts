@@ -19,10 +19,12 @@ export function createGraphqlSecurityPlugin(
 
       return {
         async didResolveOperation(context) {
+          const overrideMaxComplexity = requestContext.contextValue.req?.persistedQueryMaxComplexity;
           guard.assertWithinLimits(
             context.document,
             context.request.variables,
             context.schema,
+            overrideMaxComplexity,
           );
         },
         async willSendResponse(context) {

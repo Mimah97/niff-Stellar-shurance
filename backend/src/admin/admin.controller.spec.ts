@@ -15,10 +15,15 @@ import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.se
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminStatsService } from './admin-stats.service';
 import { SorobanService } from '../rpc/soroban.service';
+import { AdminAnalyticsService } from './admin-analytics.service';
 
 const mockSorobanService = {
   simulateGetEvidenceLimits: jest.fn(),
   invokeAdminSetEvidenceLimits: jest.fn(),
+  buildBatchRegisterVotersTransaction: jest.fn(),
+  buildRemoveVoterTransaction: jest.fn(),
+  simulateGetQuorumBps: jest.fn(),
+  buildSetQuorumBpsTransaction: jest.fn(),
 };
 
 const mockAdminService = {
@@ -27,6 +32,7 @@ const mockAdminService = {
   getBackfillJob: jest.fn(),
   setFeatureFlag: jest.fn(),
   getFeatureFlags: jest.fn(),
+  bulkSetFeatureFlags: jest.fn(),
 };
 const mockAdminPoliciesService = {
   listPolicies: jest.fn(),
@@ -63,12 +69,6 @@ const mockPrismaService = {
   },
   registeredVoter: { findMany: jest.fn() },
   claim: { findMany: jest.fn() },
-};
-const mockSorobanService = {
-  buildBatchRegisterVotersTransaction: jest.fn(),
-  buildRemoveVoterTransaction: jest.fn(),
-  simulateGetQuorumBps: jest.fn(),
-  buildSetQuorumBpsTransaction: jest.fn(),
 };
 
 const adminReq = (role = 'admin', scopes: string[] = ['admin:claims:override']) =>
@@ -112,6 +112,7 @@ describe('AdminController', () => {
         { provide: AdminStatsService, useValue: mockAdminStatsService },
         { provide: AdminAnalyticsService, useValue: mockAdminAnalyticsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
+        { provide: require('../prisma/prisma.service').PrismaService, useValue: mockPrismaService },
         { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
@@ -339,6 +340,32 @@ describe('AdminController', () => {
     });
   });
 
+  // ── POST /admin/feature-flags/bulk ──────────────────────────────────────
+
+  describe('POST /admin/feature-flags/bulk', () => {
+    it('applies updates atomically and writes a single audit row', async () => {
+      const updates = [
+        { key: 'claims_enabled', enabled: false },
+        { key: 'voting_enabled', enabled: true },
+      ];
+      mockAdminService.bulkSetFeatureFlags.mockResolvedValue(updates);
+
+      const result = await controller.bulkSetFeatureFlags(
+        { updates },
+        adminReq(),
+      );
+
+      expect(result).toEqual({ updated: updates });
+      expect(mockAdminService.bulkSetFeatureFlags).toHaveBeenCalledWith(updates, 'GADMIN');
+      expect(mockAuditService.write).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'feature_flag_bulk_update',
+          payload: expect.objectContaining({ count: 2 }),
+        }),
+      );
+    });
+  });
+
   // ── POST /admin/queues/:queue/jobs/:jobId/retry ──────────────────────────
 
   describe('POST /admin/queues/:queue/jobs/:jobId/retry', () => {
@@ -430,6 +457,7 @@ describe('Admin Role Guard Enforcement', () => {
         { provide: AdminStatsService, useValue: mockAdminStatsService },
         { provide: AdminAnalyticsService, useValue: mockAdminAnalyticsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
+        { provide: require('../prisma/prisma.service').PrismaService, useValue: mockPrismaService },
         { provide: SorobanService, useValue: mockSorobanService },
       ],
     })

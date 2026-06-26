@@ -241,6 +241,30 @@ export class AdminService {
     return this.prisma.featureFlag.findMany({ orderBy: { key: 'asc' } });
   }
 
+  /** Apply an array of {key, enabled} updates atomically in a single DB transaction.
+   *  All keys are validated against the allowlist before the transaction begins. */
+  async bulkSetFeatureFlags(
+    updates: { key: string; enabled: boolean }[],
+    actor: string,
+  ): Promise<{ key: string; enabled: boolean }[]> {
+    for (const { key } of updates) {
+      this.featureFlagsService.assertAllowlisted(key);
+    }
+
+    const results = await this.prisma.$transaction(
+      updates.map(({ key, enabled }) =>
+        this.prisma.featureFlag.upsert({
+          where: { key },
+          create: { key, enabled, updatedBy: actor },
+          update: { enabled, updatedBy: actor },
+        }),
+      ),
+    );
+
+    await this.featureFlagsService.refreshFlags();
+    return results.map((r) => ({ key: r.key, enabled: r.enabled }));
+  }
+
   async exportPoliciesCSV(options: {
     status?: string;
     holderAddress?: string;
