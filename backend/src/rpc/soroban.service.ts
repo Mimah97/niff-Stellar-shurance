@@ -81,6 +81,16 @@ export interface FinalizeClaimResult {
   onChainStatus: string;
 }
 
+export interface EvidenceLimits {
+  minEvidenceCount: number;
+  maxEvidenceCount: number;
+}
+
+export interface KeeperActionResult {
+  txHash: string;
+  ledger: number;
+}
+
 interface PendingSubmission {
   transactionXdr: string;
   timestamp: number;

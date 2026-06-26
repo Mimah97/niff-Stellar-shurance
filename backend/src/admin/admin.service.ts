@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 import { Queue } from 'bullmq';
 import { getBullMQConnection } from '../redis/client';
-import { ClaimStatus, Prisma } from '@prisma/client';
+import { ClaimSeverity, ClaimStatus, Prisma } from '@prisma/client';
 
 export interface BackfillJobInfo {
   jobId: string;
@@ -122,6 +122,7 @@ export class AdminService {
   async searchClaims(options: {
     q?: string;
     status?: string;
+    severity?: string;
     claimant?: string;
     policyId?: string;
     dateFrom?: string;
@@ -149,6 +150,11 @@ export class AdminService {
     // Status filter
     if (options.status) {
       where.status = options.status as ClaimStatus;
+    }
+
+    // Severity filter
+    if (options.severity) {
+      where.severity = options.severity.toUpperCase() as ClaimSeverity;
     }
 
     // Claimant (creator) filter

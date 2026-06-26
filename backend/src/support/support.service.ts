@@ -45,11 +45,14 @@ export class SupportService {
       throw new BadRequestException(`Ticket ${ticketId} not found`);
     }
 
+    const now = new Date();
     const updated = await this.prisma.supportTicket.update({
       where: { id: ticketId },
       data: {
         status: dto.status,
-        updatedAt: new Date(),
+        updatedAt: now,
+        // Record first staff response timestamp once, never overwrite.
+        ...(ticket.firstRespondedAt == null ? { firstRespondedAt: now } : {}),
       },
     });
 
@@ -185,6 +188,41 @@ export class SupportService {
       .digest('hex');
   }
 
+  async getFirstResponseStats(slaHours = 24) {
+    const slaDeadline = new Date(Date.now() - slaHours * 60 * 60 * 1000);
+
+    const [allResponded, slaBreached] = await Promise.all([
+      this.prisma.supportTicket.findMany({
+        where: { firstRespondedAt: { not: null } },
+        select: { createdAt: true, firstRespondedAt: true },
+      }),
+      this.prisma.supportTicket.count({
+        where: {
+          firstRespondedAt: null,
+          status: 'OPEN',
+          createdAt: { lt: slaDeadline },
+        },
+      }),
+    ]);
+
+    const totalResponded = allResponded.length;
+    const avgFirstResponseMs =
+      totalResponded > 0
+        ? allResponded.reduce((sum, t) => {
+            const ms = t.firstRespondedAt!.getTime() - t.createdAt.getTime();
+            return sum + ms;
+          }, 0) / totalResponded
+        : null;
+
+    return {
+      totalResponded,
+      avgFirstResponseMs,
+      avgFirstResponseHours: avgFirstResponseMs != null ? avgFirstResponseMs / (1000 * 60 * 60) : null,
+      slaBreachedCount: slaBreached,
+      slaHours,
+    };
+  }
+
   private mapToResponse(ticket: SupportTicket) {
     return {
       id: ticket.id,
@@ -193,6 +231,7 @@ export class SupportService {
       message: ticket.message,
       status: ticket.status,
       ipHash: ticket.ipHash ?? '',
+      firstRespondedAt: ticket.firstRespondedAt ?? null,
       createdAt: ticket.createdAt,
       updatedAt: ticket.updatedAt,
     };

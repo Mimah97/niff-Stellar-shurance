@@ -90,7 +90,7 @@ export class PrismaService
   }
 
   async onModuleInit() {
-    await this.$connect();
+    await this.connectWithBackoff();
     // Slow-query monitoring via Prisma query events (Prisma 6 compatible).
     // $use middleware was removed in Prisma 6; use $on('query') instead.
     (this as unknown as { $on: (event: string, cb: (e: { duration: number; query: string; model?: string }) => void) => void })
@@ -116,5 +116,31 @@ export class PrismaService
 
   async onModuleDestroy() {
     await this.$disconnect();
+  }
+
+  /** Retry $connect() with exponential backoff to survive DB cold starts (issue #894). */
+  private async connectWithBackoff(): Promise<void> {
+    const maxAttempts = this.config.get<number>('DB_CONNECT_MAX_ATTEMPTS', 5);
+    const initialDelayMs = this.config.get<number>('DB_CONNECT_INITIAL_DELAY_MS', 500);
+    const maxDelayMs = this.config.get<number>('DB_CONNECT_MAX_DELAY_MS', 30_000);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.$connect();
+        if (attempt > 1) {
+          this.logger.log(`DB connected on attempt ${attempt}`);
+        }
+        return;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (attempt === maxAttempts) {
+          this.logger.error(`DB connection failed after ${maxAttempts} attempts: ${msg}`);
+          throw err;
+        }
+        const delay = Math.min(initialDelayMs * 2 ** (attempt - 1), maxDelayMs);
+        this.logger.warn(`DB connection attempt ${attempt}/${maxAttempts} failed — retrying in ${delay}ms: ${msg}`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 }
