@@ -6,6 +6,7 @@ import { AdminService } from './admin.service';
 import { AdminPoliciesService } from './admin-policies.service';
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminStatsService } from './admin-stats.service';
+import { AdminAnalyticsService } from './admin-analytics.service';
 import { AuditService } from './audit.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
@@ -16,6 +17,7 @@ import { BullBoardMiddleware } from './bull-board.middleware';
 import { MetricsModule } from '../metrics/metrics.module';
 import { CacheModule } from '../cache/cache.module';
 import { RpcModule } from '../rpc/rpc.module';
+import { SupportModule } from '../support/support.module';
 
 @Module({
   imports: [
@@ -26,6 +28,7 @@ import { RpcModule } from '../rpc/rpc.module';
     MetricsModule,
     CacheModule,
     RpcModule,
+    SupportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -33,7 +36,7 @@ import { RpcModule } from '../rpc/rpc.module';
     }),
   ],
   controllers: [AdminController],
-  providers: [AdminService, AdminPoliciesService, AdminTenantsService, AdminStatsService, AuditService, QueueMonitorService],
+  providers: [AdminService, AdminPoliciesService, AdminTenantsService, AdminStatsService, AdminAnalyticsService, AuditService, QueueMonitorService],
   exports: [AuditService, QueueMonitorService],
 })
 export class AdminModule implements NestModule {

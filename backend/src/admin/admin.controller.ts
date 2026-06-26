@@ -15,10 +15,12 @@ import {
   HttpStatus,
   NotFoundException,
   Logger,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { IsArray, IsEnum, IsInt, IsOptional, IsString, Max, Min, ArrayNotEmpty, Matches } from 'class-validator';
+import { IsArray, IsEnum, IsInt, IsOptional, IsString, Max, Min, ArrayNotEmpty, Matches, IsIn } from 'class-validator';
+import { ClaimSeverity } from '@prisma/client';
 import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -37,6 +39,7 @@ import { QueueMonitorService } from '../queues/queue-monitor.service';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminStatsService } from './admin-stats.service';
+import { AdminAnalyticsService } from './admin-analytics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SorobanService } from '../rpc/soroban.service';
 
@@ -65,6 +68,11 @@ class PrivacyRequestDto {
   @IsString() subjectWalletAddress!: string;
   @IsEnum(['ANONYMIZE', 'DELETE']) requestType!: PrivacyRequestType;
   @IsOptional() @IsString() notes?: string;
+}
+
+class SetClaimSeverityDto {
+  @IsIn(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'])
+  severity!: ClaimSeverity;
 }
 
 type AdminRequest = Request & {
@@ -99,6 +107,7 @@ export class AdminController {
     private readonly solvencyMonitoringService: SolvencyMonitoringService,
     private readonly tenantsService: AdminTenantsService,
     private readonly adminStatsService: AdminStatsService,
+    private readonly adminAnalyticsService: AdminAnalyticsService,
     private readonly prisma: PrismaService,
     private readonly sorobanService: SorobanService,
   ) {}
@@ -643,10 +652,33 @@ export class AdminController {
   }
 
   /**
+   * GET /admin/analytics/renewals
+   *
+   * Renewal rate, lapsed count, and average time-to-renewal grouped by policy type
+   * and region. Response is cached in Redis with a 10-minute TTL.
+   */
+  @Get('analytics/renewals')
+  @ApiOperation({ summary: 'Renewal analytics grouped by policy type and region (10-min cache)' })
+  async getRenewalAnalytics() {
+    return this.adminAnalyticsService.getRenewalAnalytics();
+  }
+
+  /**
+   * GET /admin/analytics/support
+   *
+   * Average first-response time and SLA breach count for support tickets.
+   */
+  @Get('analytics/support')
+  @ApiOperation({ summary: 'Support ticket first-response and SLA analytics' })
+  async getSupportAnalytics() {
+    return this.adminAnalyticsService.getSupportAnalytics();
+  }
+
+  /**
    * GET /admin/claims/search
    *
    * Search claims with full-text search and filtering.
-   * Supports: q (text search), status, claimant, policyId, dateFrom, dateTo
+   * Supports: q (text search), status, severity, claimant, policyId, dateFrom, dateTo
    * Returns cursor-paginated results with total count.
    */
   @Get('claims/search')
@@ -654,6 +686,7 @@ export class AdminController {
   async searchClaims(
     @Query('q') q?: string,
     @Query('status') status?: string,
+    @Query('severity') severity?: string,
     @Query('claimant') claimant?: string,
     @Query('policyId') policyId?: string,
     @Query('dateFrom') dateFrom?: string,
@@ -664,6 +697,7 @@ export class AdminController {
     return this.adminService.searchClaims({
       q,
       status,
+      severity,
       claimant,
       policyId,
       dateFrom,
@@ -671,6 +705,38 @@ export class AdminController {
       after,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  /**
+   * PATCH /admin/claims/:id/severity
+   *
+   * Set the triage severity level (LOW/MEDIUM/HIGH/CRITICAL) on a claim.
+   * Writes an immutable audit row.
+   */
+  @Patch('claims/:id/severity')
+  @ApiOperation({ summary: 'Set triage severity on a claim' })
+  async setClaimSeverity(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetClaimSeverityDto,
+    @Req() req: AdminRequest,
+  ) {
+    const claim = await this.prisma.claim.findFirst({ where: { id, deletedAt: null } });
+    if (!claim) throw new NotFoundException(`Claim ${id} not found`);
+
+    const updated = await this.prisma.claim.update({
+      where: { id },
+      data: { severity: dto.severity },
+    });
+
+    const actor = req.user?.walletAddress ?? 'unknown';
+    await this.auditService.write({
+      actor,
+      action: 'claim_severity_set',
+      payload: { claimId: id, severity: dto.severity },
+      ipAddress: req.ip,
+    });
+
+    return { claimId: id, severity: updated.severity };
   }
 
   /**

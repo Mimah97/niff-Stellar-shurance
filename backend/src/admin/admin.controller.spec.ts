@@ -50,6 +50,10 @@ const mockQueueMonitorService = {
 const mockAdminStatsService = {
   getStats: jest.fn(),
 };
+const mockAdminAnalyticsService = {
+  getRenewalAnalytics: jest.fn(),
+  getSupportAnalytics: jest.fn(),
+};
 const mockAdminTenantsService = {
   listTenants: jest.fn(),
 };
@@ -93,6 +97,7 @@ describe('AdminController', () => {
           useValue: mockSolvencyMonitoringService,
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
+        { provide: AdminAnalyticsService, useValue: mockAdminAnalyticsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
         { provide: SorobanService, useValue: mockSorobanService },
       ],
@@ -408,6 +413,7 @@ describe('Admin Role Guard Enforcement', () => {
           useValue: mockSolvencyMonitoringService,
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
+        { provide: AdminAnalyticsService, useValue: mockAdminAnalyticsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
         { provide: SorobanService, useValue: mockSorobanService },
       ],

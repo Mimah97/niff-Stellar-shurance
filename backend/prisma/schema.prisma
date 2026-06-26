@@ -18,7 +18,8 @@ model Claim {
   asset             String?
   description       String?
   imageUrls         String[]  @default([])
-  status            ClaimStatus @default(PENDING)
+  status            ClaimStatus   @default(PENDING)
+  severity          ClaimSeverity?
   isFinalized       Boolean   @default(false)
   approveVotes      Int       @default(0)
   rejectVotes       Int       @default(0)
@@ -41,6 +42,7 @@ model Claim {
   comments          ClaimComment[]
 
   @@index([status])
+  @@index([severity])
   @@index([deletedAt])
   @@index([createdAt])
   @@index([policyId])
@@ -179,6 +181,13 @@ enum ClaimStatus {
   REJECTED
 }
 
+enum ClaimSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
 enum VoteType {
   APPROVE
   REJECT
@@ -268,18 +277,21 @@ model AllowedAsset {
 
 /// Support ticket submitted via the /support contact form.
 model SupportTicket {
-  id        String   @id @default(uuid())
-  email     String
-  subject   String
-  message   String
+  id               String       @id @default(uuid())
+  email            String
+  subject          String
+  message          String
   /// One-way hash of submitter IP for spam detection (no raw IP stored).
-  ipHash    String?
-  status    TicketStatus @default(OPEN)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  ipHash           String?
+  status           TicketStatus @default(OPEN)
+  /// Set once when the first staff status update is recorded.
+  firstRespondedAt DateTime?    @map("first_responded_at")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@index([status])
   @@index([createdAt])
+  @@index([firstRespondedAt])
   @@map("support_tickets")
 }
 
@@ -325,6 +337,40 @@ enum TicketStatus {
   IN_PROGRESS
   RESOLVED
   CLOSED
+}
+
+/// Persistent notification record. Frontend ACKs on render; unacknowledged records
+/// past expiresAt are eligible for re-delivery by the notification job.
+model Notification {
+  id             String    @id @default(uuid())
+  userId         String
+  type           String
+  payload        Json
+  acknowledgedAt DateTime? @map("acknowledged_at")
+  expiresAt      DateTime? @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, acknowledgedAt])
+  @@index([expiresAt, acknowledgedAt])
+  @@map("notifications")
+}
+
+/// Records each policy renewal for analytics. Written by RenewalService on XDR assembly.
+model PolicyRenewal {
+  id                 String   @id @default(uuid())
+  policyCompositeId  String   @map("policy_composite_id")
+  holderAddress      String   @map("holder_address")
+  policyType         String   @map("policy_type")
+  region             String
+  previousEndLedger  Int      @map("previous_end_ledger")
+  newEndLedger       Int      @map("new_end_ledger")
+  premiumPaidStroops String   @map("premium_paid_stroops")
+  renewedAt          DateTime @default(now()) @map("renewed_at")
+
+  @@index([policyCompositeId])
+  @@index([policyType, region])
+  @@index([renewedAt])
+  @@map("policy_renewals")
 }
 
 /// Off-chain comment on a claim. Soft-deleted via deletedAt.
