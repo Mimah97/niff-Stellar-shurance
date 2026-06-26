@@ -15,6 +15,7 @@ import { tryNormalizeAddress } from '../common/utils/normalize-address';
 import { QuoteSimulationCacheService } from '../quote/quote-simulation-cache.service';
 import { ClaimSummaryCacheService } from '../claims/services/claim-summary-cache.service';
 import { VotePubSubService } from '../graphql/vote-pubsub.service';
+import { OutboundWebhookService } from '../webhooks/outbound-webhook.service';
 
 type IndexerTx = Prisma.TransactionClient;
 type SorobanEvent = SorobanRpc.Api.EventResponse;
@@ -99,6 +100,7 @@ export class IndexerService {
     @Optional() private readonly quoteSimulationCache?: QuoteSimulationCacheService,
     @Optional() private readonly claimSummaryCache?: ClaimSummaryCacheService,
     @Optional() private readonly votePubSub?: VotePubSubService,
+    @Optional() private readonly outboundWebhook?: OutboundWebhookService,
   ) {
     this.networkId = this.config.get<string>('STELLAR_NETWORK', 'testnet');
     this.gapThresholdLedgers = this.config.get<number>('INDEXER_GAP_ALERT_THRESHOLD_LEDGERS', 100);
@@ -454,6 +456,18 @@ export class IndexerService {
       ledger: event.ledger,
     });
     await this.claimSummaryCache?.invalidateClaim(claimId);
+    await this.outboundWebhook?.deliverClaimFiled(
+      {
+        claimId,
+        policyId: policyDbId,
+        creatorAddress: getStringValue(data.claimant),
+        amount: getStringValue(data.amount),
+        status: 'PENDING',
+        txHash: event.txHash,
+        ledger: event.ledger,
+      },
+      `claim_filed:${event.txHash}`,
+    );
   }
 
   private async handleVoteCast(
@@ -519,6 +533,18 @@ export class IndexerService {
       noVotes: getNumberValue(data.reject_votes),
       totalVotes: getNumberValue(data.approve_votes) + getNumberValue(data.reject_votes),
     });
+    await this.outboundWebhook?.deliverVoteCast(
+      {
+        claimId,
+        voter,
+        vote: option,
+        approveVotes: getNumberValue(data.approve_votes),
+        rejectVotes: getNumberValue(data.reject_votes),
+        txHash: event.txHash,
+        ledger: event.ledger,
+      },
+      `vote_cast:${event.txHash}:${claimId}:${voter}`,
+    );
   }
 
   private async handleClaimProcessed(tx: IndexerTx, data: EventPayload, event: SorobanEvent) {

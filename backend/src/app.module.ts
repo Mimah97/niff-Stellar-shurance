@@ -34,6 +34,7 @@ import { OracleHooksController } from './experimental/oracle-hooks.controller';
 import { BetaCalculatorsController } from './experimental/beta-calculators.controller';
 import { IdempotencyMiddleware } from './common/middleware/idempotency.middleware';
 import { DeprecationHeadersInterceptor } from './common/versioning/deprecation-headers.interceptor';
+import { V1SunsetInterceptor } from './common/versioning/v1-sunset.interceptor';
 import { RejectUnversionedApiMiddleware } from './common/versioning/reject-unversioned-api.middleware';
 import { LastSeenInterceptor } from './common/interceptors/last-seen.interceptor';
 
@@ -96,6 +97,10 @@ const IDEMPOTENCY_ROUTES = [
     {
       provide: APP_INTERCEPTOR,
       useClass: DeprecationHeadersInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: V1SunsetInterceptor,
     },
     {
       provide: APP_INTERCEPTOR,

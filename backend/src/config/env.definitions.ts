@@ -128,6 +128,12 @@ export interface EnvironmentVariables {
   WEBHOOK_IP_ALLOWLIST_GITHUB: string;
   WEBHOOK_IP_ALLOWLIST_STRIPE: string;
   WEBHOOK_IP_ALLOWLIST_GENERIC: string;
+  /** Comma-separated URLs that receive outbound claim.filed webhook deliveries (#891). */
+  CLAIM_FILED_WEBHOOK_URLS: string;
+  /** Comma-separated URLs that receive outbound vote.cast webhook deliveries (#892). */
+  VOTE_CAST_WEBHOOK_URLS: string;
+  /** Comma-separated URLs that receive treasury balance-low alert webhooks (#893). */
+  TREASURY_ALERT_WEBHOOK_URLS: string;
   PAGINATION_HMAC_SECRET: string;
   DISABLE_REINDEX_WORKER: string;
   RENEWAL_REMINDER_CRON: string;
@@ -1308,6 +1314,30 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     section: 'Webhooks',
     description: 'Optional comma-separated IP allowlist for generic webhooks.',
     example: '',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
+  CLAIM_FILED_WEBHOOK_URLS: {
+    key: 'CLAIM_FILED_WEBHOOK_URLS',
+    section: 'Webhooks',
+    description: 'Comma-separated URLs to receive outbound claim.filed webhook deliveries.',
+    example: 'https://example.com/hooks/claim-filed',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
+  VOTE_CAST_WEBHOOK_URLS: {
+    key: 'VOTE_CAST_WEBHOOK_URLS',
+    section: 'Webhooks',
+    description: 'Comma-separated URLs to receive outbound vote.cast webhook deliveries.',
+    example: 'https://example.com/hooks/vote-cast',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
+  TREASURY_ALERT_WEBHOOK_URLS: {
+    key: 'TREASURY_ALERT_WEBHOOK_URLS',
+    section: 'Webhooks',
+    description: 'Comma-separated URLs to receive treasury balance-low alert webhooks.',
+    example: 'https://example.com/hooks/treasury-alert',
     required: 'optional',
     schema: Joi.string().allow('').default(''),
   },
