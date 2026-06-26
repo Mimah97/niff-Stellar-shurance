@@ -5,13 +5,18 @@ import { useCallback, useState } from "react";
 
 import {
   type ClaimFilters,
+  type ClaimSortOrder,
   DEFAULT_FILTERS,
   FILTER_QUERY_PARAMS,
+  VALID_SORT_ORDERS,
+  CLAIMS_SORT_STORAGE_KEY,
 } from "@/components/claims/types";
 
 /**
  * Reads initial ClaimFilters from URL search params on mount and writes
  * filter changes back to the URL via router.replace (no new history entry).
+ * The sort preference is additionally persisted in localStorage so it
+ * survives navigation and new sessions (restored when the URL has no sort param).
  *
  * Requirements: 5.3, 5.4
  */
@@ -22,7 +27,7 @@ export function useQueryParamFilters(): [
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Parse initial filter state from URL on first render
+  // Parse initial filter state from URL; fall back to localStorage for sort.
   const [filters] = useState<ClaimFilters>(() =>
     parseFiltersFromParams(searchParams),
   );
@@ -72,6 +77,18 @@ export function useQueryParamFilters(): [
         params.delete(FILTER_QUERY_PARAMS.needsMyVote);
       }
 
+      // sort — persist to localStorage and URL
+      if (newFilters.sort !== DEFAULT_FILTERS.sort) {
+        params.set(FILTER_QUERY_PARAMS.sort, newFilters.sort);
+      } else {
+        params.delete(FILTER_QUERY_PARAMS.sort);
+      }
+      try {
+        localStorage.setItem(CLAIMS_SORT_STORAGE_KEY, newFilters.sort);
+      } catch {
+        // localStorage may be unavailable (private browsing, storage full)
+      }
+
       router.replace(`?${params.toString()}`);
     },
     [router, searchParams],
@@ -86,6 +103,18 @@ export function useQueryParamFilters(): [
 
 const VALID_STATUSES = new Set<string>(["open", "closed", "pending", "all"]);
 
+function readStoredSort(): ClaimSortOrder {
+  try {
+    const stored = localStorage.getItem(CLAIMS_SORT_STORAGE_KEY);
+    if (stored && VALID_SORT_ORDERS.has(stored)) {
+      return stored as ClaimSortOrder;
+    }
+  } catch {
+    // localStorage unavailable
+  }
+  return DEFAULT_FILTERS.sort;
+}
+
 function parseFiltersFromParams(
   searchParams: ReturnType<typeof useSearchParams>,
 ): ClaimFilters {
@@ -94,6 +123,13 @@ function parseFiltersFromParams(
   const submittedAfter = searchParams.get(FILTER_QUERY_PARAMS.submittedAfter);
   const submittedBefore = searchParams.get(FILTER_QUERY_PARAMS.submittedBefore);
   const needsMyVoteRaw = searchParams.get(FILTER_QUERY_PARAMS.needsMyVote);
+  const sortRaw = searchParams.get(FILTER_QUERY_PARAMS.sort);
+
+  // URL sort param takes precedence; fall back to localStorage then default.
+  const sort: ClaimSortOrder =
+    sortRaw && VALID_SORT_ORDERS.has(sortRaw)
+      ? (sortRaw as ClaimSortOrder)
+      : readStoredSort();
 
   return {
     status:
@@ -104,5 +140,6 @@ function parseFiltersFromParams(
     submittedAfter: submittedAfter ?? DEFAULT_FILTERS.submittedAfter,
     submittedBefore: submittedBefore ?? DEFAULT_FILTERS.submittedBefore,
     needsMyVote: needsMyVoteRaw === "1",
+    sort,
   };
 }

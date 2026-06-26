@@ -81,6 +81,16 @@ export interface FinalizeClaimResult {
   onChainStatus: string;
 }
 
+export interface EvidenceLimits {
+  minEvidenceCount: number;
+  maxEvidenceCount: number;
+}
+
+export interface KeeperActionResult {
+  txHash: string;
+  ledger: number;
+}
+
 interface PendingSubmission {
   transactionXdr: string;
   timestamp: number;
@@ -1226,6 +1236,267 @@ export class SorobanService implements OnModuleInit, OnModuleDestroy {
     }
 
     return { txHash, ledger, onChainStatus };
+  }
+
+  /**
+   * Build unsigned batch_register_voter transaction.
+   * Signature: batch_register_voter(admin, voters: Vec<Address>)
+   */
+  async buildBatchRegisterVotersTransaction(args: {
+    admin: string;
+    voters: string[];
+  }): Promise<BuildTransactionResult> {
+    return this.trackRpc('build_batch_register_voters', () =>
+      this._buildBatchRegisterVotersTransaction(args),
+    );
+  }
+
+  private async _buildBatchRegisterVotersTransaction(args: {
+    admin: string;
+    voters: string[];
+  }): Promise<BuildTransactionResult> {
+    const server = this.makeServer();
+    const account = await this.loadAccount(server, args.admin);
+    const ledgerInfo = await server.getLatestLedger();
+
+    const voterScVals = args.voters.map(v => new Address(v).toScVal());
+    const scArgs = [
+      new Address(args.admin).toScVal(),
+      nativeToScVal(voterScVals, { type: 'vec' }),
+    ];
+
+    const contract = new Contract(this.contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(contract.call('batch_register_voter', ...scArgs))
+      .setTimeout(30)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if (Api.isSimulationError(simulation)) {
+      const err = simulation as SorobanRpc.Api.SimulateTransactionErrorResponse;
+      this.mapSimulationError(err.error);
+    }
+
+    const successSim = simulation as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const assembled = assembleTransaction(tx, successSim);
+    const unsignedXdr = assembled.build().toEnvelope().toXDR('base64');
+
+    const baseFee = BigInt(BASE_FEE);
+    const resourceFee = BigInt(successSim.minResourceFee ?? '0');
+    const totalFee = baseFee + resourceFee;
+
+    const authRequirements: AuthRequirement[] = [];
+    for (const authEntry of successSim.result?.auth ?? []) {
+      const credentials = authEntry.credentials();
+      if (credentials.switch().value === xdr.SorobanCredentialsType.sorobanCredentialsAddress().value) {
+        const addrObj = credentials.address().address();
+        const stellarAddr = Address.fromScAddress(addrObj);
+        const isContract = addrObj.switch().value === xdr.ScAddressType.scAddressTypeContract().value;
+        authRequirements.push({ address: stellarAddr.toString(), isContract });
+      }
+    }
+
+    return {
+      unsignedXdr,
+      minResourceFee: successSim.minResourceFee ?? '0',
+      baseFee: BASE_FEE.toString(),
+      totalEstimatedFee: totalFee.toString(),
+      totalEstimatedFeeXlm: SorobanService.stroopsToXlm(totalFee),
+      authRequirements,
+      memoConvention: 'Batch voter registration – no memos used for protocol correlation.',
+      currentLedger: ledgerInfo.sequence,
+    };
+  }
+
+  /**
+   * Build unsigned remove_voter transaction.
+   * Signature: remove_voter(admin, voter: Address)
+   */
+  async buildRemoveVoterTransaction(args: {
+    admin: string;
+    voter: string;
+  }): Promise<BuildTransactionResult> {
+    return this.trackRpc('build_remove_voter', () =>
+      this._buildRemoveVoterTransaction(args),
+    );
+  }
+
+  private async _buildRemoveVoterTransaction(args: {
+    admin: string;
+    voter: string;
+  }): Promise<BuildTransactionResult> {
+    const server = this.makeServer();
+    const account = await this.loadAccount(server, args.admin);
+    const ledgerInfo = await server.getLatestLedger();
+
+    const scArgs = [
+      new Address(args.admin).toScVal(),
+      new Address(args.voter).toScVal(),
+    ];
+
+    const contract = new Contract(this.contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(contract.call('remove_voter', ...scArgs))
+      .setTimeout(30)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if (Api.isSimulationError(simulation)) {
+      const err = simulation as SorobanRpc.Api.SimulateTransactionErrorResponse;
+      this.mapSimulationError(err.error);
+    }
+
+    const successSim = simulation as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const assembled = assembleTransaction(tx, successSim);
+    const unsignedXdr = assembled.build().toEnvelope().toXDR('base64');
+
+    const baseFee = BigInt(BASE_FEE);
+    const resourceFee = BigInt(successSim.minResourceFee ?? '0');
+    const totalFee = baseFee + resourceFee;
+
+    const authRequirements: AuthRequirement[] = [];
+    for (const authEntry of successSim.result?.auth ?? []) {
+      const credentials = authEntry.credentials();
+      if (credentials.switch().value === xdr.SorobanCredentialsType.sorobanCredentialsAddress().value) {
+        const addrObj = credentials.address().address();
+        const stellarAddr = Address.fromScAddress(addrObj);
+        const isContract = addrObj.switch().value === xdr.ScAddressType.scAddressTypeContract().value;
+        authRequirements.push({ address: stellarAddr.toString(), isContract });
+      }
+    }
+
+    return {
+      unsignedXdr,
+      minResourceFee: successSim.minResourceFee ?? '0',
+      baseFee: BASE_FEE.toString(),
+      totalEstimatedFee: totalFee.toString(),
+      totalEstimatedFeeXlm: SorobanService.stroopsToXlm(totalFee),
+      authRequirements,
+      memoConvention: 'Voter removal – no memos used for protocol correlation.',
+      currentLedger: ledgerInfo.sequence,
+    };
+  }
+
+  /**
+   * Build unsigned admin_set_quorum_bps transaction.
+   * Signature: admin_set_quorum_bps(admin, bps: u32)
+   */
+  async buildSetQuorumBpsTransaction(args: {
+    admin: string;
+    bps: number;
+  }): Promise<BuildTransactionResult> {
+    return this.trackRpc('build_set_quorum_bps', () =>
+      this._buildSetQuorumBpsTransaction(args),
+    );
+  }
+
+  private async _buildSetQuorumBpsTransaction(args: {
+    admin: string;
+    bps: number;
+  }): Promise<BuildTransactionResult> {
+    const server = this.makeServer();
+    const account = await this.loadAccount(server, args.admin);
+    const ledgerInfo = await server.getLatestLedger();
+
+    const scArgs = [
+      new Address(args.admin).toScVal(),
+      nativeToScVal(args.bps, { type: 'u32' }),
+    ];
+
+    const contract = new Contract(this.contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(contract.call('admin_set_quorum_bps', ...scArgs))
+      .setTimeout(30)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if (Api.isSimulationError(simulation)) {
+      const err = simulation as SorobanRpc.Api.SimulateTransactionErrorResponse;
+      this.mapSimulationError(err.error);
+    }
+
+    const successSim = simulation as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const assembled = assembleTransaction(tx, successSim);
+    const unsignedXdr = assembled.build().toEnvelope().toXDR('base64');
+
+    const baseFee = BigInt(BASE_FEE);
+    const resourceFee = BigInt(successSim.minResourceFee ?? '0');
+    const totalFee = baseFee + resourceFee;
+
+    const authRequirements: AuthRequirement[] = [];
+    for (const authEntry of successSim.result?.auth ?? []) {
+      const credentials = authEntry.credentials();
+      if (credentials.switch().value === xdr.SorobanCredentialsType.sorobanCredentialsAddress().value) {
+        const addrObj = credentials.address().address();
+        const stellarAddr = Address.fromScAddress(addrObj);
+        const isContract = addrObj.switch().value === xdr.ScAddressType.scAddressTypeContract().value;
+        authRequirements.push({ address: stellarAddr.toString(), isContract });
+      }
+    }
+
+    return {
+      unsignedXdr,
+      minResourceFee: successSim.minResourceFee ?? '0',
+      baseFee: BASE_FEE.toString(),
+      totalEstimatedFee: totalFee.toString(),
+      totalEstimatedFeeXlm: SorobanService.stroopsToXlm(totalFee),
+      authRequirements,
+      memoConvention: 'Quorum update – no memos used for protocol correlation.',
+      currentLedger: ledgerInfo.sequence,
+    };
+  }
+
+  /**
+   * Simulate `get_quorum_bps()` read-only entrypoint to retrieve current quorum basis points.
+   */
+  async simulateGetQuorumBps(): Promise<number> {
+    return this.trackRpc('simulate_get_quorum_bps', () => this._simulateGetQuorumBps());
+  }
+
+  private async _simulateGetQuorumBps(): Promise<number> {
+    if (!this.contractId) {
+      const defaultBps = this.configService.get<number>('DEFAULT_QUORUM_BPS', 5000);
+      return defaultBps;
+    }
+
+    const server = this.makeServer();
+    const source = this.configService.get<string>('SOLVENCY_SIMULATION_SOURCE_ACCOUNT')
+      ?? this.configService.get<string>('SOROBAN_ADMIN_PUBLIC_KEY');
+    if (!source) {
+      return this.configService.get<number>('DEFAULT_QUORUM_BPS', 5000);
+    }
+
+    const account = await this.loadAccount(server, source);
+    const contract = new Contract(this.contractId);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(contract.call('get_quorum_bps'))
+      .setTimeout(30)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if (Api.isSimulationError(simulation)) {
+      return this.configService.get<number>('DEFAULT_QUORUM_BPS', 5000);
+    }
+
+    const success = simulation as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const retval = success.result?.retval;
+    if (retval) {
+      const native = scValToNative(retval);
+      return typeof native === 'number' ? native : Number(native);
+    }
+    return this.configService.get<number>('DEFAULT_QUORUM_BPS', 5000);
   }
 
   /**

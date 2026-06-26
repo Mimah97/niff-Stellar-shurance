@@ -6,8 +6,10 @@ import {
   InMemoryNotificationPreferencesRepository,
   NOTIFICATION_PREFERENCES_REPOSITORY,
 } from './notification-preferences.repository';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
+  imports: [PrismaModule],
   controllers: [NotificationsController],
   providers: [
     NotificationsService,

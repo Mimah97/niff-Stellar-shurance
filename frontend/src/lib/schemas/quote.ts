@@ -36,6 +36,8 @@ export const QuoteResponseSchema = z.object({
   premiumXlm: z.string(),
   minResourceFee: z.string(),
   source: z.enum(['simulation', 'local_fallback']),
+  tokenSymbol: z.string().optional(),
+  tokenDecimals: z.number().optional(),
   inputs: z.object({
     policy_type: z.string(),
     region: z.string(),

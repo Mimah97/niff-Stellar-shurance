@@ -33,6 +33,7 @@ import { trackVoteCast } from '@/lib/analytics'
 
 import { AppealButton } from './AppealButton'
 import { AppealConfirmModal } from './AppealConfirmModal'
+import { EvidenceVerifyButton } from './EvidenceVerifyButton'
 import { VoteConfirmModal } from './vote-confirm-modal'
 import { VoteEducationPanel } from './vote-education-panel'
 import { VoteTally } from './vote-tally'
@@ -306,6 +307,40 @@ export function ClaimVotePanel({ claimId }: ClaimVotePanelProps) {
 
       {/* Live tally */}
       <VoteTally claim={claim} currentLedger={currentLedger} />
+
+      {/* Evidence */}
+      {claim.evidence.length > 0 && (
+        <section aria-label="Claim evidence" className="space-y-2">
+          <h2 className="text-base font-semibold">Evidence ({claim.evidence.length})</h2>
+          <ul className="space-y-2">
+            {claim.evidence.map((item, i) => (
+              <li
+                key={i}
+                className="flex flex-col gap-1 rounded-md border bg-muted/30 p-2 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate font-medium text-primary underline-offset-2 hover:underline"
+                    title={item.url}
+                  >
+                    {item.url.split('/').pop() || `Evidence ${i + 1}`}
+                  </a>
+                  <EvidenceVerifyButton url={item.url} storedHash={item.hash} />
+                </div>
+                <span
+                  className="font-mono text-[10px] text-muted-foreground truncate"
+                  title={item.hash}
+                >
+                  SHA-256: {item.hash.substring(0, 16)}…{item.hash.slice(-8)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Prior vote badge */}
       {alreadyVoted && (

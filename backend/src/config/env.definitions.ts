@@ -13,6 +13,7 @@ export interface EnvironmentVariables {
   REDIS_URL: string;
   STELLAR_NETWORK: StellarNetwork;
   SOROBAN_RPC_URL: string;
+  SOROBAN_SIMULATE_TIMEOUT_MS: number;
   HORIZON_URL: string;
   STELLAR_NETWORK_PASSPHRASE: string;
   CONTRACT_ID: string;
@@ -66,11 +67,15 @@ export interface EnvironmentVariables {
   TENANT_RESOLUTION_ENABLED: boolean;
   TENANT_BASE_DOMAIN: string;
   DATA_RETENTION_DAYS: number;
+  INDEXER_RETENTION_DAYS: number;
   DB_POOL_MAX: number;
   DB_POOL_MIN: number;
   DB_POOL_IDLE_TIMEOUT_MS: number;
   DB_POOL_CONNECTION_TIMEOUT_MS: number;
   DB_SLOW_QUERY_MS: number;
+  DB_CONNECT_MAX_ATTEMPTS: number;
+  DB_CONNECT_INITIAL_DELAY_MS: number;
+  DB_CONNECT_MAX_DELAY_MS: number;
   GRAPHQL_ENABLED: boolean;
   GRAPHQL_PATH: string;
   GRAPHQL_INTROSPECTION_IN_PRODUCTION: boolean;
@@ -109,6 +114,10 @@ export interface EnvironmentVariables {
   SOLVENCY_TENANT_ID: string;
   SOLVENCY_ALERT_WEBHOOK_URL: string;
   SOLVENCY_ALERT_WEBHOOK_SECRET: string;
+  IPFS_PIN_CHECK_ENABLED: string;
+  IPFS_PIN_CHECK_CRON: string;
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_URL: string;
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_SECRET: string;
   WASM_DRIFT_WEBHOOK_URL: string;
   WASM_DRIFT_WEBHOOK_SECRET: string;
   DEPLOYMENT_REGISTRY_PATH: string;
@@ -134,6 +143,34 @@ export interface EnvironmentVariables {
   EVIDENCE_UPLOAD_RATE_LIMIT: number;
   /** Evidence upload rate-limit window in seconds. */
   EVIDENCE_UPLOAD_RATE_LIMIT_WINDOW_SECONDS: number;
+  /**
+   * Loki (or any Loki-compatible) push endpoint for centralised log shipping.
+   * When set, the Winston logger ships structured JSON logs to this URL in addition
+   * to the console. Leave empty to disable remote log shipping.
+   * Example: http://loki:3100/loki/api/v1/push
+   */
+  LOG_SHIPPING_URL: string;
+  /**
+   * Bearer token sent in the Authorization header when pushing logs to Loki.
+   * Required when the Loki endpoint is protected by authentication.
+   */
+  LOG_SHIPPING_AUTH_TOKEN: string;
+  /**
+   * How often (in milliseconds) the log shipper flushes its in-memory buffer
+   * to the remote aggregation endpoint. Defaults to 5000 (5 s).
+   */
+  LOG_SHIPPING_FLUSH_INTERVAL_MS: number;
+  /**
+   * Maximum log entries held in the shipper's in-memory buffer before a flush
+   * is triggered regardless of the interval. Defaults to 100.
+   */
+  LOG_SHIPPING_BATCH_SIZE: number;
+  /**
+   * Log retention period in days communicated to the aggregation system via
+   * the X-Scope-OrgID / label set. Informational only — actual retention is
+   * configured in the Loki / aggregator deployment.
+   */
+  LOG_RETENTION_DAYS: number;
 }
 
 export type EnvKey = keyof EnvironmentVariables;
@@ -279,6 +316,14 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: 'https://soroban-testnet.stellar.org',
     required: 'required',
     schema: Joi.string().uri().required(),
+  },
+  SOROBAN_SIMULATE_TIMEOUT_MS: {
+    key: 'SOROBAN_SIMULATE_TIMEOUT_MS',
+    section: 'Stellar',
+    description: 'Max ms to wait for simulate_transaction before returning 504 (issue #895).',
+    example: '30000',
+    required: 'required',
+    schema: Joi.number().integer().min(1000).default(30_000),
   },
   HORIZON_URL: {
     key: 'HORIZON_URL',
@@ -762,6 +807,14 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     required: 'required',
     schema: Joi.number().integer().min(1).default(730),
   },
+  INDEXER_RETENTION_DAYS: {
+    key: 'INDEXER_RETENTION_DAYS',
+    section: 'Operations',
+    description: 'Days to keep RawEvent and inactive LedgerCursor rows before pruning (issue #897).',
+    example: '90',
+    required: 'required',
+    schema: Joi.number().integer().min(1).default(90),
+  },
   DB_POOL_MAX: {
     key: 'DB_POOL_MAX',
     section: 'Database',
@@ -801,6 +854,30 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: '250',
     required: 'required',
     schema: Joi.number().integer().min(10).default(250),
+  },
+  DB_CONNECT_MAX_ATTEMPTS: {
+    key: 'DB_CONNECT_MAX_ATTEMPTS',
+    section: 'Database',
+    description: 'Max $connect() attempts with exponential backoff before startup fails (issue #894).',
+    example: '5',
+    required: 'required',
+    schema: Joi.number().integer().min(1).default(5),
+  },
+  DB_CONNECT_INITIAL_DELAY_MS: {
+    key: 'DB_CONNECT_INITIAL_DELAY_MS',
+    section: 'Database',
+    description: 'Initial retry delay in ms for DB connection backoff (doubles each attempt).',
+    example: '500',
+    required: 'required',
+    schema: Joi.number().integer().min(100).default(500),
+  },
+  DB_CONNECT_MAX_DELAY_MS: {
+    key: 'DB_CONNECT_MAX_DELAY_MS',
+    section: 'Database',
+    description: 'Maximum retry delay cap in ms for DB connection backoff.',
+    example: '30000',
+    required: 'required',
+    schema: Joi.number().integer().min(1000).default(30_000),
   },
   GRAPHQL_ENABLED: {
     key: 'GRAPHQL_ENABLED',
@@ -1115,6 +1192,40 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     secret: true,
     schema: Joi.string().allow('').default(''),
   },
+  IPFS_PIN_CHECK_ENABLED: {
+    key: 'IPFS_PIN_CHECK_ENABLED',
+    section: 'Operations',
+    description: 'Enable the scheduled IPFS pinning status check job (issue #896).',
+    example: 'true',
+    required: 'optional',
+    schema: Joi.string().allow('').default('true'),
+  },
+  IPFS_PIN_CHECK_CRON: {
+    key: 'IPFS_PIN_CHECK_CRON',
+    section: 'Operations',
+    description: 'Cron expression for the IPFS pin check job (default: 02:00 daily).',
+    example: '0 2 * * *',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_URL: {
+    key: 'IPFS_PIN_CHECK_ALERT_WEBHOOK_URL',
+    section: 'Operations',
+    description: 'Webhook URL for ops alerts when a CID is no longer pinned.',
+    example: '',
+    required: 'optional',
+    secret: true,
+    schema: Joi.string().uri().allow('').default(''),
+  },
+  IPFS_PIN_CHECK_ALERT_WEBHOOK_SECRET: {
+    key: 'IPFS_PIN_CHECK_ALERT_WEBHOOK_SECRET',
+    section: 'Operations',
+    description: 'Shared secret sent with IPFS pin check alert webhooks.',
+    example: '',
+    required: 'optional',
+    secret: true,
+    schema: Joi.string().allow('').default(''),
+  },
   WASM_DRIFT_WEBHOOK_URL: {
     key: 'WASM_DRIFT_WEBHOOK_URL',
     section: 'Operations',
@@ -1261,6 +1372,54 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     example: '3600',
     required: 'optional',
     schema: Joi.number().integer().min(1).default(3600),
+  },
+  LOG_SHIPPING_URL: {
+    key: 'LOG_SHIPPING_URL',
+    section: 'Log aggregation',
+    description:
+      'Loki-compatible push endpoint for centralised log shipping. ' +
+      'When set, Winston ships structured JSON logs to this URL in addition to the console. ' +
+      'Leave empty to disable. Example: http://loki:3100/loki/api/v1/push',
+    example: '',
+    required: 'optional',
+    schema: Joi.string().uri().allow('').default(''),
+  },
+  LOG_SHIPPING_AUTH_TOKEN: {
+    key: 'LOG_SHIPPING_AUTH_TOKEN',
+    section: 'Log aggregation',
+    description:
+      'Bearer token sent in the Authorization header when pushing logs to the aggregation endpoint.',
+    example: '',
+    required: 'optional',
+    secret: true,
+    schema: Joi.string().allow('').default(''),
+  },
+  LOG_SHIPPING_FLUSH_INTERVAL_MS: {
+    key: 'LOG_SHIPPING_FLUSH_INTERVAL_MS',
+    section: 'Log aggregation',
+    description: 'Milliseconds between log buffer flushes to the remote aggregation endpoint.',
+    example: '5000',
+    required: 'optional',
+    schema: Joi.number().integer().min(500).default(5000),
+  },
+  LOG_SHIPPING_BATCH_SIZE: {
+    key: 'LOG_SHIPPING_BATCH_SIZE',
+    section: 'Log aggregation',
+    description:
+      'Maximum log entries buffered before a flush is forced regardless of the interval.',
+    example: '100',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(100),
+  },
+  LOG_RETENTION_DAYS: {
+    key: 'LOG_RETENTION_DAYS',
+    section: 'Log aggregation',
+    description:
+      'Intended log retention period in days. Informational label sent to the aggregator — ' +
+      'actual retention is enforced by the Loki deployment configuration.',
+    example: '30',
+    required: 'optional',
+    schema: Joi.number().integer().min(1).default(30),
   },
 };
 

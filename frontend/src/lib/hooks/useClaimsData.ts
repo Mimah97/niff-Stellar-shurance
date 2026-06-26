@@ -50,6 +50,10 @@ function buildQueryParams(
     params.set(FILTER_QUERY_PARAMS.needsMyVote, "1");
   }
 
+  if (filters.sort && filters.sort !== "newest") {
+    params.set(FILTER_QUERY_PARAMS.sort, filters.sort);
+  }
+
   params.set(FILTER_QUERY_PARAMS.page, String(page));
 
   return params;

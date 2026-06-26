@@ -1,11 +1,12 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
-import { SupportTicket } from '@prisma/client';
+import { FaqItem, SupportTicket } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CaptchaService } from './captcha.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketStatusDto } from './dto/update-ticket-status.dto';
+import { CreateFaqItemDto, UpdateFaqItemDto, ReorderFaqItemsDto } from './dto/faq.dto';
 
 @Injectable()
 export class SupportService {
@@ -44,11 +45,14 @@ export class SupportService {
       throw new BadRequestException(`Ticket ${ticketId} not found`);
     }
 
+    const now = new Date();
     const updated = await this.prisma.supportTicket.update({
       where: { id: ticketId },
       data: {
         status: dto.status,
-        updatedAt: new Date(),
+        updatedAt: now,
+        // Record first staff response timestamp once, never overwrite.
+        ...(ticket.firstRespondedAt == null ? { firstRespondedAt: now } : {}),
       },
     });
 
@@ -104,6 +108,49 @@ export class SupportService {
     });
   }
 
+  async listFaqItems(): Promise<FaqItem[]> {
+    return this.prisma.faqItem.findMany({
+      orderBy: { displayOrder: 'asc' },
+    });
+  }
+
+  async createFaqItem(dto: CreateFaqItemDto): Promise<FaqItem> {
+    const maxOrder = await this.prisma.faqItem.aggregate({ _max: { displayOrder: true } });
+    const nextOrder = (maxOrder._max.displayOrder ?? -1) + 1;
+    return this.prisma.faqItem.create({
+      data: {
+        question: dto.question,
+        answer: dto.answer,
+        category: dto.category ?? 'General',
+        displayOrder: dto.displayOrder ?? nextOrder,
+      },
+    });
+  }
+
+  async updateFaqItem(id: string, dto: UpdateFaqItemDto): Promise<FaqItem> {
+    const existing = await this.prisma.faqItem.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException(`FAQ item ${id} not found`);
+    return this.prisma.faqItem.update({ where: { id }, data: dto });
+  }
+
+  async deleteFaqItem(id: string): Promise<void> {
+    const existing = await this.prisma.faqItem.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException(`FAQ item ${id} not found`);
+    await this.prisma.faqItem.delete({ where: { id } });
+  }
+
+  async reorderFaqItems(dto: ReorderFaqItemsDto): Promise<FaqItem[]> {
+    await this.prisma.$transaction(
+      dto.items.map((entry) =>
+        this.prisma.faqItem.update({
+          where: { id: entry.id },
+          data: { displayOrder: entry.displayOrder },
+        }),
+      ),
+    );
+    return this.listFaqItems();
+  }
+
   private async notifyWebhook(ticket: { id: string; email: string; subject: string; message: string; createdAt: Date }) {
     const webhookUrl = this.config.get<string>('SUPPORT_WEBHOOK_URL', '');
     if (!webhookUrl) {
@@ -141,6 +188,41 @@ export class SupportService {
       .digest('hex');
   }
 
+  async getFirstResponseStats(slaHours = 24) {
+    const slaDeadline = new Date(Date.now() - slaHours * 60 * 60 * 1000);
+
+    const [allResponded, slaBreached] = await Promise.all([
+      this.prisma.supportTicket.findMany({
+        where: { firstRespondedAt: { not: null } },
+        select: { createdAt: true, firstRespondedAt: true },
+      }),
+      this.prisma.supportTicket.count({
+        where: {
+          firstRespondedAt: null,
+          status: 'OPEN',
+          createdAt: { lt: slaDeadline },
+        },
+      }),
+    ]);
+
+    const totalResponded = allResponded.length;
+    const avgFirstResponseMs =
+      totalResponded > 0
+        ? allResponded.reduce((sum, t) => {
+            const ms = t.firstRespondedAt!.getTime() - t.createdAt.getTime();
+            return sum + ms;
+          }, 0) / totalResponded
+        : null;
+
+    return {
+      totalResponded,
+      avgFirstResponseMs,
+      avgFirstResponseHours: avgFirstResponseMs != null ? avgFirstResponseMs / (1000 * 60 * 60) : null,
+      slaBreachedCount: slaBreached,
+      slaHours,
+    };
+  }
+
   private mapToResponse(ticket: SupportTicket) {
     return {
       id: ticket.id,
@@ -149,6 +231,7 @@ export class SupportService {
       message: ticket.message,
       status: ticket.status,
       ipHash: ticket.ipHash ?? '',
+      firstRespondedAt: ticket.firstRespondedAt ?? null,
       createdAt: ticket.createdAt,
       updatedAt: ticket.updatedAt,
     };

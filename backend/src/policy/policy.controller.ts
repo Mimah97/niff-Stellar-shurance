@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PolicyService } from './policy.service';
@@ -9,6 +9,22 @@ import { WalletRateLimitGuard } from '../rate-limit/wallet-rate-limit.guard';
 @Controller('policy')
 export class PolicyController {
   constructor(private readonly policyService: PolicyService) {}
+
+  /**
+   * GET /api/policy/regions
+   *
+   * Returns the list of available policy region risk tiers.
+   */
+  @Get('regions')
+  @ApiOperation({ summary: 'List available policy regions' })
+  @ApiResponse({ status: 200, description: 'Available region risk tiers' })
+  async getRegions() {
+    return [
+      { id: 'Low', label: 'Low Risk', factor: 8, description: 'Low-risk geographical regions with stable conditions.' },
+      { id: 'Medium', label: 'Medium Risk', factor: 10, description: 'Moderate-risk regions with some variability.' },
+      { id: 'High', label: 'High Risk', factor: 14, description: 'High-risk regions with elevated claim probability.' },
+    ];
+  }
 
   /**
    * POST /api/policy/build-transaction

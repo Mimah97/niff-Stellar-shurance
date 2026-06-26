@@ -146,6 +146,18 @@ export interface PolicyDto {
    * @example "/policies/GABC.../1"
    */
   _link: string;
+  /**
+   * Off-chain URI to the policy governing document.
+   * Displayed as a clickable link on the policy detail page.
+   * @example "ipfs://QmX..."
+   */
+  metadata_uri?: string;
+  /**
+   * Hex-encoded SHA-256 hash of the off-chain policy document.
+   * Shown alongside metadata_uri for document verification.
+   * @example "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730"
+   */
+  terms_hash?: string;
 }
 
 /** Paginated list response wrapper. */
@@ -204,5 +216,7 @@ export function toPolicyDto(p: Policy, claims: Claim[]): PolicyDto {
     claims: claims.map(toClaimSummaryDto),
     beneficiary: p.beneficiary ?? null,
     _link: `/policies/${encodeURIComponent(p.holder)}/${p.policy_id}`,
+    metadata_uri: p.metadata_uri,
+    terms_hash: p.terms_hash,
   };
 }

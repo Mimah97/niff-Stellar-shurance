@@ -14,7 +14,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminStatsService } from './admin-stats.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { SorobanService } from '../rpc/soroban.service';
+
+const mockSorobanService = {
+  simulateGetEvidenceLimits: jest.fn(),
+  invokeAdminSetEvidenceLimits: jest.fn(),
+};
 
 const mockAdminService = {
   enqueueReindex: jest.fn(),
@@ -45,11 +50,25 @@ const mockQueueMonitorService = {
 const mockAdminStatsService = {
   getStats: jest.fn(),
 };
+const mockAdminAnalyticsService = {
+  getRenewalAnalytics: jest.fn(),
+  getSupportAnalytics: jest.fn(),
+};
 const mockAdminTenantsService = {
   listTenants: jest.fn(),
 };
 const mockPrismaService = {
-  rawEvent: { findMany: jest.fn().mockResolvedValue([]) },
+  holderProfile: {
+    findMany: jest.fn(),
+  },
+  registeredVoter: { findMany: jest.fn() },
+  claim: { findMany: jest.fn() },
+};
+const mockSorobanService = {
+  buildBatchRegisterVotersTransaction: jest.fn(),
+  buildRemoveVoterTransaction: jest.fn(),
+  simulateGetQuorumBps: jest.fn(),
+  buildSetQuorumBpsTransaction: jest.fn(),
 };
 
 const adminReq = (role = 'admin', scopes: string[] = ['admin:claims:override']) =>
@@ -91,8 +110,9 @@ describe('AdminController', () => {
           useValue: mockSolvencyMonitoringService,
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
+        { provide: AdminAnalyticsService, useValue: mockAdminAnalyticsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
-        { provide: PrismaService, useValue: mockPrismaService },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -339,13 +359,17 @@ describe('AdminController', () => {
   // ── Role guard — unauthorized access ────────────────────────────────────
 
   describe('Role guard — non-admin access denied', () => {
-    // AdminRoleGuard requires Reflector + AuthIdentityService — test via mock
+    const makeReflector = (minRole = 'admin') =>
+      ({
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue(minRole),
+      }) as unknown as import('@nestjs/core').Reflector;
+
     const makeGuard = () => {
-      const mockReflector = { get: jest.fn().mockReturnValue(false) } as unknown as import('@nestjs/core').Reflector;
       const mockAuthIdentity = {
         resolveRequestIdentity: jest.fn().mockResolvedValue(null),
       } as unknown as import('../auth/auth-identity.service').AuthIdentityService;
-      return new AdminRoleGuard(mockReflector, mockAuthIdentity);
+      return new AdminRoleGuard(makeReflector(), mockAuthIdentity);
     };
 
     it('throws ForbiddenException when no user present', async () => {
@@ -355,21 +379,19 @@ describe('AdminController', () => {
     });
 
     it('throws ForbiddenException for non-admin identity', async () => {
-      const mockReflector = { get: jest.fn().mockReturnValue(false) } as unknown as import('@nestjs/core').Reflector;
       const mockAuthIdentity = {
-        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'support_readonly' }),
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'viewer', scopes: [] }),
       } as unknown as import('../auth/auth-identity.service').AuthIdentityService;
-      const guard = new AdminRoleGuard(mockReflector, mockAuthIdentity);
-      const ctx = toExecutionContext('support_readonly');
+      const guard = new AdminRoleGuard(makeReflector('admin'), mockAuthIdentity);
+      const ctx = toExecutionContext('viewer');
       await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
     });
 
     it('allows admin role through', async () => {
-      const mockReflector = { get: jest.fn().mockReturnValue(false) } as unknown as import('@nestjs/core').Reflector;
       const mockAuthIdentity = {
-        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'admin' }),
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'admin', scopes: [] }),
       } as unknown as import('../auth/auth-identity.service').AuthIdentityService;
-      const guard = new AdminRoleGuard(mockReflector, mockAuthIdentity);
+      const guard = new AdminRoleGuard(makeReflector('admin'), mockAuthIdentity);
       const ctx = toExecutionContext('admin');
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
     });
@@ -406,8 +428,9 @@ describe('Admin Role Guard Enforcement', () => {
           useValue: mockSolvencyMonitoringService,
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
+        { provide: AdminAnalyticsService, useValue: mockAdminAnalyticsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
-        { provide: PrismaService, useValue: mockPrismaService },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -445,10 +468,84 @@ describe('Admin Role Guard Enforcement', () => {
   });
 
   describe('Admin Role Required', () => {
-    it('guard rejects non-admin role (unit test)', async () => {
-      const mockReflector = { get: jest.fn().mockReturnValue(false) };
+    const makeGuardCtx = (minRole?: string) => ({
+      getHandler: () => ({}),
+      getClass: () => ({}),
+      getType: () => 'http',
+      switchToHttp: () => ({ getRequest: () => ({ ip: '127.0.0.1' }) }),
+      getArgByIndex: () => undefined,
+      // getAllAndOverride mock handled by reflector below
+    });
+
+    it('viewer is rejected on default (admin-level) endpoint', async () => {
+      const mockReflector = {
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue('admin'),
+      };
       const mockAuthIdentity = {
-        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'support_readonly' }),
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'viewer', scopes: [] }),
+      };
+      const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
+      await expect(guard.canActivate(makeGuardCtx() as any)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('viewer is allowed on viewer-level endpoint', async () => {
+      const mockReflector = {
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue('viewer'),
+      };
+      const mockAuthIdentity = {
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'viewer', scopes: [] }),
+      };
+      const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
+      await expect(guard.canActivate(makeGuardCtx() as any)).resolves.toBe(true);
+    });
+
+    it('admin is rejected on superadmin-level endpoint', async () => {
+      const mockReflector = {
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue('superadmin'),
+      };
+      const mockAuthIdentity = {
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'admin', scopes: [] }),
+      };
+      const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
+      await expect(guard.canActivate(makeGuardCtx() as any)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('superadmin passes all levels', async () => {
+      for (const minRole of ['viewer', 'admin', 'superadmin']) {
+        const mockReflector = {
+          get: jest.fn().mockReturnValue(false),
+          getAllAndOverride: jest.fn().mockReturnValue(minRole),
+        };
+        const mockAuthIdentity = {
+          resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'superadmin', scopes: [] }),
+        };
+        const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
+        await expect(guard.canActivate(makeGuardCtx() as any)).resolves.toBe(true);
+      }
+    });
+
+    it('support_readonly is treated as viewer (backwards compat)', async () => {
+      const mockReflector = {
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue('viewer'),
+      };
+      const mockAuthIdentity = {
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'support_readonly', scopes: [] }),
+      };
+      const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
+      await expect(guard.canActivate(makeGuardCtx() as any)).resolves.toBe(true);
+    });
+
+    it('guard rejects non-admin role (unit test)', async () => {
+      const mockReflector = {
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue('admin'),
+      };
+      const mockAuthIdentity = {
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'viewer' }),
       };
       const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
       const ctx = {
@@ -460,9 +557,12 @@ describe('Admin Role Guard Enforcement', () => {
     });
 
     it('should reject staff users without admin role (guard unit test)', async () => {
-      const mockReflector = { get: jest.fn().mockReturnValue(false) };
+      const mockReflector = {
+        get: jest.fn().mockReturnValue(false),
+        getAllAndOverride: jest.fn().mockReturnValue('admin'),
+      };
       const mockAuthIdentity = {
-        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'staff' }),
+        resolveRequestIdentity: jest.fn().mockResolvedValue({ kind: 'staff', staffId: 's1', email: 'a@b.com', role: 'viewer' }),
       };
       const guard = new AdminRoleGuard(mockReflector as any, mockAuthIdentity as any);
       const ctx = {
@@ -496,6 +596,39 @@ describe('Admin Role Guard Enforcement', () => {
 
       await expect(controller.getAdminPolicies('false'))
         .resolves.toBeDefined();
+    });
+  });
+
+  // ── GET /admin/users ─────────────────────────────────────────────────────
+
+  describe('GET /admin/users', () => {
+    const profiles = [
+      { walletAddress: 'GA1', displayName: 'Alice', email: null, locale: 'en', createdAt: new Date(), lastSeenAt: new Date() },
+      { walletAddress: 'GA2', displayName: null,    email: null, locale: 'en', createdAt: new Date(), lastSeenAt: null },
+    ];
+
+    it('returns all profiles ordered by lastSeenAt', async () => {
+      mockPrismaService.holderProfile.findMany.mockResolvedValue(profiles);
+      const result = await controller.listUsers();
+      expect(result).toEqual(profiles);
+      expect(mockPrismaService.holderProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: [{ lastSeenAt: 'desc' }, { walletAddress: 'asc' }] }),
+      );
+    });
+
+    it('filters by dormantDays when provided', async () => {
+      mockPrismaService.holderProfile.findMany.mockResolvedValue([profiles[1]]);
+      const result = await controller.listUsers('30');
+      expect(result).toEqual([profiles[1]]);
+      const call = mockPrismaService.holderProfile.findMany.mock.calls[0][0];
+      expect(call.where).toHaveProperty('OR');
+    });
+
+    it('respects limit cap of 500', async () => {
+      mockPrismaService.holderProfile.findMany.mockResolvedValue([]);
+      await controller.listUsers(undefined, '1000');
+      const call = mockPrismaService.holderProfile.findMany.mock.calls[0][0];
+      expect(call.take).toBe(500);
     });
   });
 });

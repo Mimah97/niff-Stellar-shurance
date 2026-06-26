@@ -2,7 +2,7 @@
 
 import React, { useRef, useCallback } from "react";
 
-import type { ClaimFilters } from "./types";
+import type { ClaimFilters, ClaimSortOrder } from "./types";
 
 export interface FilterBarProps {
   filters: ClaimFilters;
@@ -17,6 +17,13 @@ const STATUS_OPTIONS: Array<{ value: ClaimFilters["status"]; label: string }> =
     { value: "closed", label: "Closed" },
     { value: "pending", label: "Pending" },
   ];
+
+const SORT_OPTIONS: Array<{ value: ClaimSortOrder; label: string }> = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "most_votes", label: "Most votes" },
+  { value: "deadline", label: "Deadline" },
+];
 
 /**
  * FilterBar — renders status select, policy text input, date-range inputs,
@@ -80,6 +87,13 @@ export function FilterBar({
     scheduleChange({ ...pendingRef.current, needsMyVote: e.target.checked });
   };
 
+  const handleSort = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    scheduleChange({
+      ...pendingRef.current,
+      sort: e.target.value as ClaimSortOrder,
+    });
+  };
+
   return (
     <div
       role="search"
@@ -138,6 +152,23 @@ export function FilterBar({
           className="rounded border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[44px]"
           aria-label="Filter by submitted before date"
         />
+      </label>
+
+      {/* Sort order */}
+      <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+        Sort
+        <select
+          defaultValue={filters.sort}
+          onChange={handleSort}
+          className="rounded border border-gray-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[44px]"
+          aria-label="Sort claims"
+        >
+          {SORT_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
       </label>
 
       {/* "Needs my vote" toggle — only rendered when showNeedsMyVote is true (Req 4.2) */}

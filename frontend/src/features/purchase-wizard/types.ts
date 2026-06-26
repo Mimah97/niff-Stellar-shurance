@@ -11,6 +11,11 @@ export interface WizardDraft {
 
 export type SubmitPhase =
   | 'idle'
+  | 'allowance_checking'  // pre-flight: check token allowance
+  | 'approval_needed'     // allowance insufficient, need to approve
+  | 'approval_signing'    // wallet.signTransaction for approval
+  | 'approval_submitting' // POST /allowances/submit
+  | 'approval_polling'    // useTransactionStatus for approval
   | 'initiating'   // POST /policies/initiate
   | 'signing'      // wallet.signTransaction
   | 'submitting'   // POST /policies/submit

@@ -27,6 +27,7 @@ import { GraphqlApiModule } from './graphql/graphql.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
 import { EventsModule } from './events/events.module';
 import { ProfileModule } from './profile/profile.module';
+import { FeedsModule } from './feeds/feeds.module';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { AppLoggerService } from './common/logger/app-logger.service';
 import { OracleHooksController } from './experimental/oracle-hooks.controller';
@@ -34,6 +35,7 @@ import { BetaCalculatorsController } from './experimental/beta-calculators.contr
 import { IdempotencyMiddleware } from './common/middleware/idempotency.middleware';
 import { DeprecationHeadersInterceptor } from './common/versioning/deprecation-headers.interceptor';
 import { RejectUnversionedApiMiddleware } from './common/versioning/reject-unversioned-api.middleware';
+import { LastSeenInterceptor } from './common/interceptors/last-seen.interceptor';
 
 /** Mutation routes that require idempotency key support (issue #363). */
 const IDEMPOTENCY_ROUTES = [
@@ -85,6 +87,7 @@ const IDEMPOTENCY_ROUTES = [
     MaintenanceModule,
     EventsModule,
     ProfileModule,
+    FeedsModule,
   ],
   controllers: [OracleHooksController, BetaCalculatorsController],
   providers: [
@@ -93,6 +96,10 @@ const IDEMPOTENCY_ROUTES = [
     {
       provide: APP_INTERCEPTOR,
       useClass: DeprecationHeadersInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LastSeenInterceptor,
     },
   ],
 })

@@ -2,6 +2,7 @@ import { Injectable, LoggerService, Scope } from '@nestjs/common';
 import { createLogger, format, transports, Logger } from 'winston';
 import { ConfigService } from '@nestjs/config';
 import type { TransformableInfo } from 'logform';
+import { LokiTransport } from './loki.transport';
 
 /**
  * Sensitive header / field names that must never appear in log output.
@@ -163,6 +164,20 @@ export class AppLoggerService implements LoggerService {
   constructor(private readonly config?: ConfigService) {
     const level = config?.get<string>('LOG_LEVEL') ?? 'info';
 
+    const lokiUrl = config?.get<string>('LOG_SHIPPING_URL');
+    const lokiTransport = lokiUrl
+      ? new LokiTransport({
+          lokiUrl,
+          authToken: config?.get<string>('LOG_SHIPPING_AUTH_TOKEN') || undefined,
+          flushIntervalMs: config?.get<number>('LOG_SHIPPING_FLUSH_INTERVAL_MS') ?? 5000,
+          batchSize: config?.get<number>('LOG_SHIPPING_BATCH_SIZE') ?? 100,
+          labels: {
+            service: 'niffyinsure-api',
+            env: config?.get<string>('NODE_ENV') ?? 'development',
+          },
+        })
+      : undefined;
+
     this.winston = createLogger({
       level,
       format: format.combine(
@@ -173,7 +188,9 @@ export class AppLoggerService implements LoggerService {
         format.json(),
       ),
       defaultMeta: { service: 'niffyinsure-api' },
-      transports: [new transports.Console()],
+      transports: lokiTransport
+        ? [new transports.Console(), lokiTransport]
+        : [new transports.Console()],
     });
   }
 

@@ -12,7 +12,7 @@ import { useWallet } from '@/hooks/use-wallet'
 import { useAuth } from '@/lib/hooks/useAuth'
 import { SETTINGS_NETWORK_SECTION_ID } from '@/features/wallet/constants'
 import { getContracts } from '@/lib/network-manifest'
-import { validateRpcUrl, PUBLIC_RPC, STATUS_PAGES, type AppSettings } from '@/lib/settings-store'
+import { validateRpcUrl, validateManifestReachable, PUBLIC_RPC, STATUS_PAGES, type AppSettings } from '@/lib/settings-store'
 import type { Network } from '@/lib/network-manifest'
 import { resetTour, useOnboardingTour } from '@/hooks/use-onboarding-tour'
 
@@ -28,6 +28,8 @@ export function SettingsPanel() {
   const [rpcInput, setRpcInput] = useState(settings.customRpcUrl ?? '')
   const [rpcError, setRpcError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [validating, setValidating] = useState(false)
+  const [networkError, setNetworkError] = useState<string | null>(null)
 
   const { syncing, syncError } = useNotificationSync(
     settings.notifications,
@@ -37,12 +39,25 @@ export function SettingsPanel() {
 
   const { startTour } = useOnboardingTour()
 
-  function handleNetworkChange(network: Network) {
-    update('network', network)
-    setAppNetwork(network === 'mainnet' ? 'mainnet' : 'testnet')
-    startTransition(() => {
-      getContracts(network)
-    })
+  async function handleNetworkChange(network: Network) {
+    setNetworkError(null)
+    setValidating(true)
+    try {
+      const result = await validateManifestReachable(network)
+      if (!result.reachable) {
+        setNetworkError(
+          `Cannot reach the ${network} network manifest. Check your internet connection and try again.`,
+        )
+        return
+      }
+      update('network', network)
+      setAppNetwork(network === 'mainnet' ? 'mainnet' : 'testnet')
+      startTransition(() => {
+        getContracts(network)
+      })
+    } finally {
+      setValidating(false)
+    }
   }
 
   function handleNotificationToggle(key: keyof AppSettings['notifications'], value: boolean) {
@@ -188,13 +203,22 @@ export function SettingsPanel() {
                 variant={settings.network === n ? 'default' : 'outline'}
                 size="sm"
                 onClick={() => handleNetworkChange(n)}
-                disabled={isPending}
+                disabled={isPending || validating}
                 aria-pressed={settings.network === n}
               >
                 {n === 'mainnet' ? 'Mainnet' : 'Testnet'}
               </Button>
             ))}
           </div>
+          {networkError && (
+            <div
+              role="alert"
+              className="flex gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p>{networkError}</p>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">
             Active RPC: <span className="font-mono">{activeRpc}</span>
             {!isCustomRpc && (

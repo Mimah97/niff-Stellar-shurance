@@ -32,6 +32,8 @@ export const PolicyDtoSchema = z.object({
     avg_ledger_close_seconds: z.literal(5),
   }),
   beneficiary: z.string().nullable().optional(),
+  metadata_uri: z.string().optional(),
+  terms_hash: z.string().optional(),
   claims: z.array(ClaimSummaryDtoSchema),
   _link: z.string(),
 });
@@ -47,6 +49,33 @@ export type PolicyListDto = z.infer<typeof PolicyListDtoSchema>;
 export type ClaimSummaryDto = z.infer<typeof ClaimSummaryDtoSchema>;
 export type PolicyStatusFilter = 'active' | 'expired' | 'all';
 export type PolicySortField = 'expiry' | 'coverage' | 'premium';
+
+// ── Claim cap DTO ─────────────────────────────────────────────────────────────
+
+export const ClaimCapDtoSchema = z.object({
+  /** Maximum cumulative payout allowed in the current rolling window (stroops) */
+  rolling_cap: z.string(),
+  /** Total amount claimed so far in the current rolling window (stroops) */
+  claimed_in_window: z.string(),
+  /** Ledger at which the current window started */
+  window_start_ledger: z.number(),
+  /** Ledger at which the current window resets */
+  window_reset_ledger: z.number(),
+  /** Ledgers remaining until the window resets */
+  window_ledgers_remaining: z.number(),
+});
+
+export type ClaimCapDto = z.infer<typeof ClaimCapDtoSchema>;
+
+export async function fetchClaimCap(policyId: string, signal?: AbortSignal): Promise<ClaimCapDto> {
+  const { apiUrl } = getConfig();
+  const res = await fetch(`${apiUrl}/api/policies/${encodeURIComponent(policyId)}/claim-cap`, { signal });
+  if (!res.ok) throw new Error('Failed to fetch claim cap');
+  const json: unknown = await res.json();
+  const parsed = ClaimCapDtoSchema.safeParse(json);
+  if (!parsed.success) throw new Error('Invalid claim cap response');
+  return parsed.data;
+}
 
 export interface PolicyListParams {
   holder: string;

@@ -110,6 +110,12 @@ export const ERROR_CATALOG = {
     i18nKey: 'errors.tx.insufficientFee',
     description: 'Transaction fee is below the network minimum.',
   },
+  SIMULATION_TIMEOUT: {
+    code: 'SIMULATION_TIMEOUT',
+    httpStatus: HttpStatus.GATEWAY_TIMEOUT,
+    i18nKey: 'errors.tx.simulationTimeout',
+    description: 'Soroban simulate_transaction timed out.',
+  },
   SIMULATION_FAILED: {
     code: 'SIMULATION_FAILED',
     httpStatus: HttpStatus.BAD_REQUEST,

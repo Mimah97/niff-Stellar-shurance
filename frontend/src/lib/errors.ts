@@ -96,3 +96,249 @@ export function getCorrelationId(error: unknown): string | undefined {
   if (error instanceof AppError) return error.requestId;
   return undefined;
 }
+
+// ── Error catalog (human-readable descriptions for /support/error-codes) ─────
+
+export interface ErrorCatalogEntry {
+  code: string;
+  message: string;
+  causes: string[];
+  resolution: string;
+}
+
+export const ERROR_CATALOG: ErrorCatalogEntry[] = [
+  {
+    code: 'UNKNOWN_ERROR',
+    message: ERROR_MESSAGES.UNKNOWN_ERROR,
+    causes: ['An unhandled exception occurred server-side or in the browser.'],
+    resolution: 'Refresh the page and try again. If the issue persists, contact support with the correlation ID.',
+  },
+  {
+    code: 'NETWORK_ERROR',
+    message: ERROR_MESSAGES.NETWORK_ERROR,
+    causes: ['Your device is offline.', 'The server is temporarily unreachable.'],
+    resolution: 'Check your internet connection, then retry. If on a VPN, try disabling it.',
+  },
+  {
+    code: 'SERVER_ERROR',
+    message: ERROR_MESSAGES.SERVER_ERROR,
+    causes: ['An internal server error occurred (5xx).', 'Ongoing maintenance or deployment.'],
+    resolution: 'Wait a few minutes and try again. Check the status page for outage information.',
+  },
+  {
+    code: 'TIMEOUT_ERROR',
+    message: ERROR_MESSAGES.TIMEOUT_ERROR,
+    causes: ['Slow network connection.', 'Server under heavy load.'],
+    resolution: 'Retry the action. On a slow connection, allow extra time for large transactions.',
+  },
+  {
+    code: 'RATE_LIMIT_EXCEEDED',
+    message: ERROR_MESSAGES.RATE_LIMIT_EXCEEDED,
+    causes: ['Too many API requests in a short period.'],
+    resolution: 'Wait 60 seconds before retrying. Avoid rapidly submitting the same form.',
+  },
+  {
+    code: 'VALIDATION_ERROR',
+    message: ERROR_MESSAGES.VALIDATION_ERROR,
+    causes: ['A required field is missing or contains an invalid value.'],
+    resolution: 'Review all highlighted fields and correct the values before resubmitting.',
+  },
+  {
+    code: 'UNAUTHORIZED',
+    message: ERROR_MESSAGES.UNAUTHORIZED,
+    causes: ['Your session token has expired.', 'Wallet disconnected during the session.'],
+    resolution: 'Reconnect your wallet and sign a new authentication challenge.',
+  },
+  {
+    code: 'FORBIDDEN',
+    message: ERROR_MESSAGES.FORBIDDEN,
+    causes: ['Your wallet address does not have the required role.', 'Accessing an admin-only endpoint.'],
+    resolution: 'Ensure you are using the correct wallet. Contact an admin if access should be granted.',
+  },
+  {
+    code: 'WALLET_NOT_CONNECTED',
+    message: ERROR_MESSAGES.WALLET_NOT_CONNECTED,
+    causes: ['No wallet extension is connected.', 'Wallet was disconnected or locked.'],
+    resolution: 'Click "Connect Wallet" and approve the connection in your wallet extension.',
+  },
+  {
+    code: 'SIGNATURE_INVALID',
+    message: ERROR_MESSAGES.SIGNATURE_INVALID,
+    causes: ['The signed payload did not match the expected nonce.', 'Wallet returned a malformed signature.'],
+    resolution: 'Disconnect and reconnect your wallet, then retry the action.',
+  },
+  {
+    code: 'NONCE_EXPIRED',
+    message: ERROR_MESSAGES.NONCE_EXPIRED,
+    causes: ['The authentication nonce was not signed within the allowed window (≈5 minutes).'],
+    resolution: 'Start the connection flow again promptly and sign the challenge within 5 minutes.',
+  },
+  {
+    code: 'INVALID_QUOTE',
+    message: ERROR_MESSAGES.INVALID_QUOTE,
+    causes: ['The quote ID does not exist.', 'The quote parameters were tampered with.'],
+    resolution: 'Request a fresh quote from the quote page and proceed immediately.',
+  },
+  {
+    code: 'QUOTE_EXPIRED',
+    message: ERROR_MESSAGES.QUOTE_EXPIRED,
+    causes: ['Quotes are valid for 15 minutes. The expiry time has passed.'],
+    resolution: 'Return to the quote page and submit a new quote request.',
+  },
+  {
+    code: 'INVALID_WALLET_ADDRESS',
+    message: ERROR_MESSAGES.INVALID_WALLET_ADDRESS,
+    causes: ['The wallet address is not a valid 56-character Stellar public key (G…).'],
+    resolution: 'Copy your wallet address from your Stellar wallet and paste it again.',
+  },
+  {
+    code: 'INSUFFICIENT_BALANCE',
+    message: ERROR_MESSAGES.INSUFFICIENT_BALANCE,
+    causes: ['Your XLM balance is too low to pay the premium plus network fees.'],
+    resolution: 'Top up your wallet with XLM and retry. Consider using the on-ramp feature.',
+  },
+  {
+    code: 'POLICY_ALREADY_EXISTS',
+    message: ERROR_MESSAGES.POLICY_ALREADY_EXISTS,
+    causes: ['A policy was already purchased for this quote ID.'],
+    resolution: 'View your existing policy on the Policies page. Request a new quote if you need additional coverage.',
+  },
+  {
+    code: 'TERMS_NOT_ACCEPTED',
+    message: ERROR_MESSAGES.TERMS_NOT_ACCEPTED,
+    causes: ['The terms and conditions checkbox was not checked before submitting.'],
+    resolution: 'Read and accept the terms and conditions, then submit again.',
+  },
+  {
+    code: 'CLAIM_NOT_FOUND',
+    message: ERROR_MESSAGES.CLAIM_NOT_FOUND,
+    causes: ['The claim ID does not exist in the indexer or on-chain.', 'The ID in the URL is incorrect.'],
+    resolution: 'Check the URL and claim ID. Navigate from the Claims page to find the correct claim.',
+  },
+  {
+    code: 'CLAIM_ALREADY_EXISTS',
+    message: ERROR_MESSAGES.CLAIM_ALREADY_EXISTS,
+    causes: ['A claim was already filed under this policy.'],
+    resolution: 'Find your existing claim on the Claims page. Only one active claim per policy is allowed.',
+  },
+  {
+    code: 'POLICY_NOT_FOUND',
+    message: ERROR_MESSAGES.POLICY_NOT_FOUND,
+    causes: ['The referenced policy does not exist or belongs to a different wallet.'],
+    resolution: 'Ensure you are connected with the wallet that owns the policy.',
+  },
+  {
+    code: 'POLICY_INACTIVE',
+    message: ERROR_MESSAGES.POLICY_INACTIVE,
+    causes: ['The policy has expired or been terminated.'],
+    resolution: 'You can only file claims against active policies. Renew or purchase a new policy.',
+  },
+  {
+    code: 'CLAIM_AMOUNT_EXCEEDS_COVERAGE',
+    message: ERROR_MESSAGES.CLAIM_AMOUNT_EXCEEDS_COVERAGE,
+    causes: ['The requested claim amount is greater than the policy coverage limit.'],
+    resolution: 'Reduce the claim amount to be within your coverage limit.',
+  },
+  {
+    code: 'OPEN_CLAIM_EXISTS',
+    message: ERROR_MESSAGES.OPEN_CLAIM_EXISTS,
+    causes: ['There is already an open (Processing or Pending) claim for this policy.'],
+    resolution: 'Wait for the existing claim to be resolved before filing a new one.',
+  },
+  {
+    code: 'ALREADY_VOTED',
+    message: ERROR_MESSAGES.ALREADY_VOTED,
+    causes: ['Your wallet has already cast a vote on this claim.'],
+    resolution: 'Each eligible voter may only vote once per claim. No action needed.',
+  },
+  {
+    code: 'NOT_A_VOTER',
+    message: ERROR_MESSAGES.NOT_A_VOTER,
+    causes: ['Your wallet is not registered as an eligible voter.', 'Voting eligibility is determined at claim filing time.'],
+    resolution: 'Only registered voters may vote on claims. Contact governance if you believe this is an error.',
+  },
+  {
+    code: 'VOTING_CLOSED',
+    message: ERROR_MESSAGES.VOTING_CLOSED,
+    causes: ['The voting deadline ledger has passed.'],
+    resolution: 'The voting window for this claim has closed. No further votes can be cast.',
+  },
+  {
+    code: 'TRANSACTION_FAILED',
+    message: ERROR_MESSAGES.TRANSACTION_FAILED,
+    causes: ['The Stellar transaction was rejected by validators.', 'An on-chain precondition was not met.'],
+    resolution: 'Retry the transaction. If it fails again, check for conflicting on-chain state.',
+  },
+  {
+    code: 'TRANSACTION_REJECTED',
+    message: ERROR_MESSAGES.TRANSACTION_REJECTED,
+    causes: ['You rejected the transaction in your wallet.', 'The wallet extension timed out.'],
+    resolution: 'Re-initiate the action and approve the transaction in your wallet when prompted.',
+  },
+  {
+    code: 'INSUFFICIENT_FEE',
+    message: ERROR_MESSAGES.INSUFFICIENT_FEE,
+    causes: ['The submitted transaction fee (base + resource fee) was below the network minimum.'],
+    resolution: 'The app automatically calculates fees. Retry; if the error persists, your XLM balance may be too low.',
+  },
+  {
+    code: 'CONTRACT_ERROR',
+    message: ERROR_MESSAGES.CONTRACT_ERROR,
+    causes: ['The Soroban smart contract returned a non-zero error code.', 'Business logic precondition failed on-chain.'],
+    resolution: 'Note any displayed error code and contact support. Do not retry without investigating.',
+  },
+  {
+    code: 'SOROBAN_RPC_ERROR',
+    message: ERROR_MESSAGES.SOROBAN_RPC_ERROR,
+    causes: ['The Soroban RPC node returned an error or is temporarily unavailable.'],
+    resolution: 'Wait a minute and retry. The app will automatically switch to a fallback RPC if available.',
+  },
+  {
+    code: 'LEDGER_CLOSED',
+    message: ERROR_MESSAGES.LEDGER_CLOSED,
+    causes: ['The ledger closed before your transaction was included in a block.'],
+    resolution: 'Resubmit the transaction. This can happen during high network congestion.',
+  },
+  {
+    code: 'INVALID_CONTRACT_ADDRESS',
+    message: ERROR_MESSAGES.INVALID_CONTRACT_ADDRESS,
+    causes: ['The Soroban contract address in the app configuration is malformed.'],
+    resolution: 'This is a configuration issue. Contact the team; do not manually edit contract addresses.',
+  },
+  {
+    code: 'INSUFFICIENT_COVERAGE',
+    message: ERROR_MESSAGES.INSUFFICIENT_COVERAGE,
+    causes: ['The requested coverage amount is below the protocol minimum.'],
+    resolution: 'Increase the coverage amount to meet the minimum requirement shown on the quote page.',
+  },
+  {
+    code: 'EXCESSIVE_COVERAGE',
+    message: ERROR_MESSAGES.EXCESSIVE_COVERAGE,
+    causes: ['The requested coverage amount exceeds the protocol maximum.'],
+    resolution: 'Reduce the coverage amount or split coverage across multiple policies.',
+  },
+  {
+    code: 'HIGH_RISK_PROFILE',
+    message: ERROR_MESSAGES.HIGH_RISK_PROFILE,
+    causes: ['Your on-chain risk profile score exceeds the threshold for new coverage.'],
+    resolution: 'Wait for existing claims to resolve. You may reapply after your risk score decreases.',
+  },
+  {
+    code: 'CONTRACT_NOT_SUPPORTED',
+    message: ERROR_MESSAGES.CONTRACT_NOT_SUPPORTED,
+    causes: ['The selected contract type is disabled or not yet deployed to this network.'],
+    resolution: 'Choose a supported contract type. Check the documentation for available options.',
+  },
+  {
+    code: 'INVALID_RISK_CATEGORY',
+    message: ERROR_MESSAGES.INVALID_RISK_CATEGORY,
+    causes: ['An unrecognised risk category string was submitted.'],
+    resolution: 'Select a valid risk category from the dropdown. Do not manually edit the URL parameters.',
+  },
+  {
+    code: 'INVALID_DURATION',
+    message: ERROR_MESSAGES.INVALID_DURATION,
+    causes: ['The policy duration is outside the allowed range (typically 30–365 days).'],
+    resolution: 'Adjust the duration to fall within the allowed range shown on the quote form.',
+  },
+];

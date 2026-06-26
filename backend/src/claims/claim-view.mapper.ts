@@ -7,12 +7,14 @@ import {
   ClaimMetadataDto,
   ConsistencyMetadataDto,
   DeadlineDto,
+  DisputeInfoDto,
   QuorumProgressDto,
   SanitizedEvidenceDto,
   VoteTalliesDto,
 } from './dto/claim.dto';
 
 const VOTE_WINDOW_LEDGERS = 120_960;
+const DISPUTE_WINDOW_LEDGERS = 10_080;
 const SECONDS_PER_LEDGER = 5;
 
 export type ClaimWithVotes = Prisma.ClaimGetPayload<{
@@ -79,6 +81,17 @@ export class ClaimViewMapper {
       });
     }
 
+    const isApproved = currentStatus === 'approved';
+    const disputeDeadlineLedger = isApproved
+      ? claim.updatedAtLedger + DISPUTE_WINDOW_LEDGERS
+      : undefined;
+    const disputeDeadlineTime = isApproved
+      ? new Date(claim.updatedAt.getTime() + DISPUTE_WINDOW_LEDGERS * SECONDS_PER_LEDGER * 1000)
+      : undefined;
+    const disputeWindowOpen = isApproved && disputeDeadlineLedger !== undefined
+      ? disputeDeadlineLedger > lastLedger
+      : false;
+
     return {
       metadata: {
         id: claim.id,
@@ -114,6 +127,17 @@ export class ClaimViewMapper {
         remainingSeconds,
         deadline_estimate_utc: deadlineEstimateUtc,
       } as DeadlineDto,
+      dispute: {
+        disputeDeadlineLedger,
+        disputeDeadlineTime,
+        disputeWindowOpen,
+        remainingDisputeSeconds: disputeWindowOpen && disputeDeadlineLedger
+          ? (disputeDeadlineLedger - lastLedger) * SECONDS_PER_LEDGER
+          : undefined,
+        disputeNote: disputeWindowOpen
+          ? 'This claim is within the dispute window. An admin may still raise a dispute before the payout auto-executes.'
+          : undefined,
+      } as DisputeInfoDto,
       evidence: {
         gatewayUrl: sanitizedHash ? `${this.ipfsGateway}/ipfs/${sanitizedHash}` : '',
         hash: sanitizedHash,

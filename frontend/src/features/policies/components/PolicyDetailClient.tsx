@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Clock, FileText, Shield } from 'lucide-react'
 
+import { PolicyMetadataUriViewer } from '@/components/policies/PolicyMetadataUriViewer'
 import { useWallet } from '@/features/wallet'
 import { RenewModal } from './RenewModal'
 import { TerminateModal } from './TerminateModal'
@@ -14,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/use-toast'
 import { PrintButton } from '@/components/ui/print-button'
 import { getConfig } from '@/config/env'
-import { PolicyDtoSchema, type PolicyDto, type ClaimSummaryDto } from '../api'
+import { PolicyDtoSchema, type PolicyDto, type ClaimSummaryDto, fetchClaimCap, type ClaimCapDto } from '../api'
 
 interface PolicyDetailClientProps {
   initialPolicy: PolicyDto
@@ -22,7 +23,7 @@ interface PolicyDetailClientProps {
 }
 
 const LEDGER_CLOSE_SECONDS = 5
-const RENEWAL_WINDOW_LEDGERS = 30 * 24 * 60 * 60 / LEDGER_CLOSE_SECONDS
+const RENEWAL_WINDOW_LEDGERS = (30 * 24 * 60 * 60) / LEDGER_CLOSE_SECONDS
 
 function formatStroopsToXLM(stroops: string): string {
   const num = BigInt(stroops)
@@ -59,6 +60,86 @@ async function fetchPolicy(policyId: string): Promise<PolicyDto> {
   return parsed.data
 }
 
+function ClaimCapCard({ policyId }: { policyId: string }) {
+  const { data, isLoading, isError } = useQuery<ClaimCapDto>({
+    queryKey: ['policy-claim-cap', policyId],
+    queryFn: ({ signal }) => fetchClaimCap(policyId, signal),
+    refetchInterval: 30000,
+    retry: false,
+  })
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><AlertCircle className="h-5 w-5" />Claim Cap Usage</CardTitle></CardHeader>
+        <CardContent><p className="text-sm text-gray-500">Loading claim cap data…</p></CardContent>
+      </Card>
+    )
+  }
+
+  if (isError || !data) return null
+
+  const cap = BigInt(data.rolling_cap)
+  const used = BigInt(data.claimed_in_window)
+  const pct = cap === 0n ? 0 : Number((used * 100n) / cap)
+  const resetSeconds = data.window_ledgers_remaining * LEDGER_CLOSE_SECONDS
+  const resetDays = Math.floor(resetSeconds / 86400)
+  const resetHours = Math.floor((resetSeconds % 86400) / 3600)
+
+  const barColor =
+    pct >= 90 ? '#ef4444' : pct >= 70 ? '#eab308' : undefined
+
+  const capXlm = (Number(cap) / 10_000_000).toFixed(2)
+  const usedXlm = (Number(used) / 10_000_000).toFixed(2)
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <AlertCircle className="h-5 w-5" />
+          Rolling Claim Cap
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-gray-500">Claimed this window</span>
+          <span className="font-mono font-medium">
+            {usedXlm} / {capXlm} XLM
+          </span>
+        </div>
+        <div
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`${pct.toFixed(1)}% of rolling claim cap used`}
+          className="relative h-3 w-full overflow-hidden rounded-full bg-secondary"
+        >
+          <div
+            className="h-full transition-all"
+            style={{ width: `${pct}%`, backgroundColor: barColor }}
+          />
+        </div>
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>{pct.toFixed(1)}% used</span>
+          <span>
+            Resets in{' '}
+            {resetDays > 0
+              ? `${resetDays}d ${resetHours}h`
+              : `${resetHours}h`}{' '}
+            <span className="text-gray-400">(ledger #{data.window_reset_ledger.toLocaleString()})</span>
+          </span>
+        </div>
+        {pct >= 90 && (
+          <p className="text-xs text-red-600 font-medium" role="alert">
+            Cap nearly exhausted — new claims may be rejected until the window resets.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClientProps) {
   const { connectionStatus, address } = useWallet()
   const { toast } = useToast()
@@ -77,7 +158,11 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
   const ledgersRemaining = policy.expiry_countdown?.ledgers_remaining ?? 0
   const secondsRemaining = ledgersRemaining * LEDGER_CLOSE_SECONDS
   const isInRenewalWindow = ledgersRemaining > 0 && ledgersRemaining <= RENEWAL_WINDOW_LEDGERS
-  const isExpired = ledgersRemaining <= 0
+  // ledgers_remaining goes negative after expiry; grace ends at -DEFAULT_GRACE_PERIOD_LEDGERS
+  const isInGracePeriod = ledgersRemaining <= 0 && ledgersRemaining > -DEFAULT_GRACE_PERIOD_LEDGERS
+  const graceLedgersRemaining = isInGracePeriod ? ledgersRemaining + DEFAULT_GRACE_PERIOD_LEDGERS : 0
+  const graceSecondsRemaining = graceLedgersRemaining * LEDGER_CLOSE_SECONDS
+  const isExpired = ledgersRemaining <= -DEFAULT_GRACE_PERIOD_LEDGERS
   const connected = connectionStatus === 'connected'
   const isHolder = connected && address === policy.holder
   const beneficiary = (policy as PolicyDto & { beneficiary?: string | null }).beneficiary ?? null
@@ -129,22 +214,52 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
         </CardContent>
       </Card>
 
+      {policy.metadata_uri && (
+        <PolicyMetadataUriViewer
+          metadataUri={policy.metadata_uri}
+          termsHash={policy.terms_hash}
+        />
+      )}
+
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" />Expiry Countdown</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          {isExpired ? (
-            <p className="text-lg font-semibold text-red-600">Policy expired</p>
+          {isInGracePeriod ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3">
+                <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="font-semibold text-amber-900">Policy expired — grace period active</p>
+                  <p className="text-sm text-amber-700">Renew now to avoid a coverage gap.</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-amber-700">{formatDuration(graceSecondsRemaining)}</p>
+                <p className="text-sm text-gray-500">{graceLedgersRemaining.toLocaleString()} ledgers left in grace period</p>
+              </div>
+              <p className="text-xs text-gray-400">ⓘ Grace period ends ~{formatDuration(graceSecondsRemaining)} from now. After this window closes, you will need to purchase a new policy.</p>
+            </div>
+          ) : isExpired ? (
+            <p className="text-lg font-semibold text-red-600">Policy expired — grace period has ended</p>
           ) : (
             <>
               <div>
                 <p className="text-2xl font-bold">{formatDuration(secondsRemaining)}</p>
                 <p className="text-sm text-gray-500">{ledgersRemaining.toLocaleString()} ledgers remaining</p>
               </div>
+              {isInRenewalWindow && (
+                <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
+                  <Clock className="h-4 w-4 text-blue-600 flex-shrink-0" aria-hidden="true" />
+                  <p className="text-sm text-blue-800">Renewal window is open — renew before expiry to maintain continuous coverage.</p>
+                </div>
+              )}
               <p className="text-xs text-gray-400">ⓘ Estimated time based on 5s average ledger close time. Displayed values may lag on-chain state by up to 15 seconds.</p>
             </>
           )}
         </CardContent>
       </Card>
+
+      <ClaimCapCard policyId={policyId} />
 
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Linked Claims</CardTitle></CardHeader>
@@ -182,7 +297,7 @@ export function PolicyDetailClient({ initialPolicy, policyId }: PolicyDetailClie
 
       {isHolder && policy.is_active && (
         <div className="flex gap-3 flex-wrap">
-          <Button onClick={() => setRenewModalOpen(true)} disabled={!isInRenewalWindow} title={!isInRenewalWindow ? `Renewal available in the last 30 days before expiry (${Math.max(0, ledgersRemaining - RENEWAL_WINDOW_LEDGERS)} ledgers remaining)` : undefined}>Renew Policy</Button>
+          <Button onClick={() => setRenewModalOpen(true)} disabled={!isInRenewalWindow && !isInGracePeriod} title={!isInRenewalWindow && !isInGracePeriod ? `Renewal available in the last 30 days before expiry (${Math.max(0, ledgersRemaining - RENEWAL_WINDOW_LEDGERS)} ledgers remaining)` : undefined}>Renew Policy</Button>
           <Button variant="destructive" onClick={() => setTerminateModalOpen(true)}>Terminate Policy</Button>
         </div>
       )}

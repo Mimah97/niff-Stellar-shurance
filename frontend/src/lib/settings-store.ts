@@ -86,3 +86,33 @@ export function validateRpcUrl(url: string): string | null {
     return 'Enter a valid URL (e.g. https://rpc.example.com)'
   }
 }
+
+export interface ManifestReachableResult {
+  reachable: boolean
+  latencyMs?: number
+}
+
+/**
+ * Checks whether the public RPC manifest for the given network is reachable.
+ * Makes a lightweight POST to the Soroban RPC health endpoint and measures
+ * round-trip latency. Returns `{ reachable: false }` on any network error or
+ * non-OK response.
+ */
+export async function validateManifestReachable(
+  network: Network,
+): Promise<ManifestReachableResult> {
+  const url = PUBLIC_RPC[network]
+  const start = Date.now()
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth', params: [] }),
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!res.ok) return { reachable: false }
+    return { reachable: true, latencyMs: Date.now() - start }
+  } catch {
+    return { reachable: false }
+  }
+}

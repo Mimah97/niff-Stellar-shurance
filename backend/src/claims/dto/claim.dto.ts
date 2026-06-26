@@ -165,6 +165,38 @@ export class DeadlineDto {
   deadline_estimate_utc!: string;
 }
 
+export class DisputeInfoDto {
+  @ApiProperty({ description: 'Dispute deadline ledger number (if claim is approved)' })
+  @Expose()
+  @IsOptional()
+  @IsInt()
+  disputeDeadlineLedger?: number;
+
+  @ApiProperty({ description: 'Dispute deadline timestamp' })
+  @Expose()
+  @IsOptional()
+  @IsDate()
+  disputeDeadlineTime?: Date;
+
+  @ApiProperty({ description: 'Whether the dispute window is still open' })
+  @Expose()
+  @IsOptional()
+  @IsBoolean()
+  disputeWindowOpen?: boolean;
+
+  @ApiPropertyOptional({ description: 'Time remaining in seconds before auto-execution (null if closed)' })
+  @Expose()
+  @IsOptional()
+  @IsNumber()
+  remainingDisputeSeconds?: number;
+
+  @ApiProperty({ description: 'Note indicating admin can still raise a dispute' })
+  @Expose()
+  @IsOptional()
+  @IsString()
+  disputeNote?: string;
+}
+
 export class SanitizedEvidenceDto {
   @ApiProperty({ description: 'IPFS gateway URL' })
   @Expose()
@@ -312,6 +344,11 @@ export class ClaimStatusHistoryEntryDto {
 }
 
 export class ClaimDetailResponseDto extends ClaimListItemDto {
+  @ApiProperty({ description: 'Dispute window information for approved claims', type: DisputeInfoDto })
+  @Expose()
+  @ValidateNested()
+  @Type(() => DisputeInfoDto)
+  dispute!: DisputeInfoDto;
   @ApiProperty({ description: 'Quorum progress percentage from aggregation service (0-100)' })
   @Expose()
   @IsInt()

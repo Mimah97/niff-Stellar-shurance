@@ -218,6 +218,7 @@ const DEFAULT_FILTERS: ClaimFilters = {
   submittedAfter: null,
   submittedBefore: null,
   needsMyVote: false,
+  sort: "newest",
 };
 
 // ─── Property 9: No authentication-dependent UI rendered without JWT ──────────
@@ -238,6 +239,7 @@ describe("Property 9: No authentication-dependent UI rendered without JWT", () =
             nil: null,
           }),
           needsMyVote: fc.boolean(),
+          sort: fc.constantFrom("newest", "oldest", "most_votes", "deadline"),
         }),
         (filters) => {
           const { container } = render(
@@ -284,6 +286,7 @@ describe("Property 14: Debounce suppresses intermediate requests", () => {
               nil: null,
             }),
             needsMyVote: fc.boolean(),
+            sort: fc.constantFrom("newest", "oldest", "most_votes", "deadline"),
           }),
           { minLength: 2, maxLength: 10 },
         ),
