@@ -34,6 +34,7 @@
     "error-catalog:export": "ts-node scripts/export-error-catalog.ts",
     "env:example:generate": "ts-node scripts/generate-env-example.ts",
     "env:example:check": "ts-node scripts/check-env-example.ts",
+    "env:parity:check": "ts-node scripts/check-env-parity.ts",
     "secrets:generate:jwt": "ts-node scripts/generate-jwt-key.ts",
     "ops:replay-indexer": "ts-node scripts/replay-indexer.ts",
     "export-spec": "ts-node -P tsconfig.json scripts/export-spec.ts",
