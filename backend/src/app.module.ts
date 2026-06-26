@@ -34,6 +34,7 @@ import { BetaCalculatorsController } from './experimental/beta-calculators.contr
 import { IdempotencyMiddleware } from './common/middleware/idempotency.middleware';
 import { DeprecationHeadersInterceptor } from './common/versioning/deprecation-headers.interceptor';
 import { RejectUnversionedApiMiddleware } from './common/versioning/reject-unversioned-api.middleware';
+import { LastSeenInterceptor } from './common/interceptors/last-seen.interceptor';
 
 /** Mutation routes that require idempotency key support (issue #363). */
 const IDEMPOTENCY_ROUTES = [
@@ -93,6 +94,10 @@ const IDEMPOTENCY_ROUTES = [
     {
       provide: APP_INTERCEPTOR,
       useClass: DeprecationHeadersInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LastSeenInterceptor,
     },
   ],
 })

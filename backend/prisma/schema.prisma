@@ -363,6 +363,8 @@ model HolderProfile {
   notificationPreferences Json?  @default("{}") @map("notification_preferences")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
+  lastSeenAt            DateTime? @map("last_seen_at")
 
+  @@index([lastSeenAt])
   @@map("holder_profiles")
 }

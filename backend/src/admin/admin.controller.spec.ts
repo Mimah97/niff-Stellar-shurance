@@ -14,6 +14,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminStatsService } from './admin-stats.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { SorobanService } from '../rpc/soroban.service';
 
 const mockAdminService = {
   enqueueReindex: jest.fn(),
@@ -46,6 +48,19 @@ const mockAdminStatsService = {
 };
 const mockAdminTenantsService = {
   listTenants: jest.fn(),
+};
+const mockPrismaService = {
+  holderProfile: {
+    findMany: jest.fn(),
+  },
+  registeredVoter: { findMany: jest.fn() },
+  claim: { findMany: jest.fn() },
+};
+const mockSorobanService = {
+  buildBatchRegisterVotersTransaction: jest.fn(),
+  buildRemoveVoterTransaction: jest.fn(),
+  simulateGetQuorumBps: jest.fn(),
+  buildSetQuorumBpsTransaction: jest.fn(),
 };
 
 const adminReq = (role = 'admin', scopes: string[] = ['admin:claims:override']) =>
@@ -88,6 +103,8 @@ describe('AdminController', () => {
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
+        { provide: PrismaService, useValue: mockPrismaService },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -402,6 +419,8 @@ describe('Admin Role Guard Enforcement', () => {
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
+        { provide: PrismaService, useValue: mockPrismaService },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -490,6 +509,39 @@ describe('Admin Role Guard Enforcement', () => {
 
       await expect(controller.getAdminPolicies('false'))
         .resolves.toBeDefined();
+    });
+  });
+
+  // ── GET /admin/users ─────────────────────────────────────────────────────
+
+  describe('GET /admin/users', () => {
+    const profiles = [
+      { walletAddress: 'GA1', displayName: 'Alice', email: null, locale: 'en', createdAt: new Date(), lastSeenAt: new Date() },
+      { walletAddress: 'GA2', displayName: null,    email: null, locale: 'en', createdAt: new Date(), lastSeenAt: null },
+    ];
+
+    it('returns all profiles ordered by lastSeenAt', async () => {
+      mockPrismaService.holderProfile.findMany.mockResolvedValue(profiles);
+      const result = await controller.listUsers();
+      expect(result).toEqual(profiles);
+      expect(mockPrismaService.holderProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: [{ lastSeenAt: 'desc' }, { walletAddress: 'asc' }] }),
+      );
+    });
+
+    it('filters by dormantDays when provided', async () => {
+      mockPrismaService.holderProfile.findMany.mockResolvedValue([profiles[1]]);
+      const result = await controller.listUsers('30');
+      expect(result).toEqual([profiles[1]]);
+      const call = mockPrismaService.holderProfile.findMany.mock.calls[0][0];
+      expect(call.where).toHaveProperty('OR');
+    });
+
+    it('respects limit cap of 500', async () => {
+      mockPrismaService.holderProfile.findMany.mockResolvedValue([]);
+      await controller.listUsers(undefined, '1000');
+      const call = mockPrismaService.holderProfile.findMany.mock.calls[0][0];
+      expect(call.take).toBe(500);
     });
   });
 });

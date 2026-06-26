@@ -251,6 +251,53 @@ export class AdminController {
   }
 
   /**
+   * GET /admin/users
+   *
+   * Lists all holder profiles ordered by lastSeenAt descending.
+   * Useful for dormant account detection: accounts with null or stale
+   * lastSeenAt have not made an authenticated call in the tracked window.
+   *
+   * Supports optional query params:
+   *   - dormantDays (number): only return users not seen in X days
+   *   - limit (number, default 100, max 500)
+   *   - cursor (walletAddress): keyset pagination
+   */
+  @Get('users')
+  @ApiOperation({ summary: 'List holder profiles with last-active timestamp for dormant account detection' })
+  async listUsers(
+    @Query('dormantDays') dormantDays?: string,
+    @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    const take = Math.min(Number(limit) || 100, 500);
+    const where: Record<string, unknown> = {};
+    if (dormantDays) {
+      const days = parseInt(dormantDays, 10);
+      if (!isNaN(days) && days > 0) {
+        const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        where['OR'] = [
+          { lastSeenAt: null },
+          { lastSeenAt: { lt: cutoff } },
+        ];
+      }
+    }
+    return this.prisma.holderProfile.findMany({
+      where,
+      orderBy: [{ lastSeenAt: 'desc' }, { walletAddress: 'asc' }],
+      take,
+      ...(cursor ? { skip: 1, cursor: { walletAddress: cursor } } : {}),
+      select: {
+        walletAddress: true,
+        displayName: true,
+        email: true,
+        locale: true,
+        createdAt: true,
+        lastSeenAt: true,
+      },
+    });
+  }
+
+  /**
    * GET /admin/stats
    *
    * Aggregated platform metrics: policy counts, claim counts by status,
