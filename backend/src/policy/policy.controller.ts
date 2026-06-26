@@ -4,6 +4,7 @@ import { Throttle } from '@nestjs/throttler';
 import { PolicyService } from './policy.service';
 import { BuildTransactionDto } from './dto/build-transaction.dto';
 import { WalletRateLimitGuard } from '../rate-limit/wallet-rate-limit.guard';
+import { GeoBlockGuard } from './geo-block.guard';
 
 @ApiTags('Policy')
 @Controller('policy')
@@ -39,11 +40,12 @@ export class PolicyController {
   @Post('build-transaction')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @UseGuards(WalletRateLimitGuard)
+  @UseGuards(WalletRateLimitGuard, GeoBlockGuard)
   @ApiOperation({ summary: 'Build unsigned initiate_policy transaction' })
   @ApiResponse({ status: 200, description: 'Unsigned transaction XDR + fee estimates' })
   @ApiResponse({ status: 400, description: 'Validation / account / simulation error' })
   @ApiResponse({ status: 429, description: 'Rate limited — protects RPC quotas' })
+  @ApiResponse({ status: 451, description: 'Blocked jurisdiction (BLOCKED_COUNTRIES)' })
   @ApiResponse({ status: 503, description: 'Contract not deployed or RPC unavailable' })
   async buildTransaction(@Body() dto: BuildTransactionDto) {
     return this.policyService.buildTransaction(dto);

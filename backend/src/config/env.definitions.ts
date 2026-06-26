@@ -56,6 +56,7 @@ export interface EnvironmentVariables {
   FRONTEND_ORIGINS: string;
   ADMIN_CORS_ORIGINS: string;
   CORS_ALLOWED_ORIGINS: string;
+  BLOCKED_COUNTRIES: string;
   LOG_LEVEL: LogLevel;
   CACHE_TTL_SECONDS: number;
   QUOTE_SIMULATION_CACHE_ENABLED: 'true' | 'false' | '1' | '0';
@@ -700,6 +701,15 @@ export const ENV_DEFINITIONS: EnvDefinitionMap = {
     section: 'HTTP',
     description: 'Comma-separated admin UI origins allowed by CORS.',
     example: 'http://localhost:3002',
+    required: 'optional',
+    schema: Joi.string().allow('').default(''),
+  },
+  BLOCKED_COUNTRIES: {
+    key: 'BLOCKED_COUNTRIES',
+    section: 'Compliance',
+    description:
+      'Comma-separated ISO 3166-1 alpha-2 country codes blocked from policy initiation (geo-compliance). Empty = no blocking.',
+    example: 'KP,IR,CU',
     required: 'optional',
     schema: Joi.string().allow('').default(''),
   },
