@@ -11,6 +11,7 @@ const mockTicket = {
   message: 'Test message body here',
   status: 'OPEN',
   ipHash: 'hash',
+  firstRespondedAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -103,6 +104,27 @@ describe('SupportService', () => {
     );
   });
 
+  it('updateTicketStatus sets firstRespondedAt on first response', async () => {
+    const prisma = makePrisma();
+    const svc = new SupportService(prisma, makeCaptcha(), makeConfig());
+    await svc.updateTicketStatus('uuid-1', { status: 'IN_PROGRESS' }, 'GADMIN');
+    const updateCall = (prisma.supportTicket.update as jest.Mock).mock.calls[0][0];
+    expect(updateCall.data.firstRespondedAt).toBeDefined();
+  });
+
+  it('updateTicketStatus does not overwrite existing firstRespondedAt', async () => {
+    const prisma = makePrisma();
+    const existingDate = new Date('2026-01-01');
+    (prisma.supportTicket.findUnique as jest.Mock).mockResolvedValue({
+      ...mockTicket,
+      firstRespondedAt: existingDate,
+    });
+    const svc = new SupportService(prisma, makeCaptcha(), makeConfig());
+    await svc.updateTicketStatus('uuid-1', { status: 'RESOLVED' }, 'GADMIN');
+    const updateCall = (prisma.supportTicket.update as jest.Mock).mock.calls[0][0];
+    expect(updateCall.data.firstRespondedAt).toBeUndefined();
+  });
+
   it('updateTicketStatus throws when ticket not found', async () => {
     const prisma = makePrisma();
     (prisma.supportTicket.findUnique as jest.Mock).mockResolvedValue(null);
@@ -110,6 +132,21 @@ describe('SupportService', () => {
     await expect(svc.updateTicketStatus('bad-id', { status: 'RESOLVED' }, 'GADMIN')).rejects.toThrow(
       BadRequestException,
     );
+  });
+
+  it('getFirstResponseStats returns avgFirstResponseMs and slaBreachedCount', async () => {
+    const respondedAt = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
+    const createdAt = new Date(Date.now() - 3 * 60 * 60 * 1000); // 3 hours ago
+    const prisma = makePrisma();
+    (prisma.supportTicket.findMany as jest.Mock).mockResolvedValue([
+      { createdAt, firstRespondedAt: respondedAt },
+    ]);
+    (prisma.supportTicket.count as jest.Mock).mockResolvedValue(2);
+    const svc = new SupportService(prisma, makeCaptcha(), makeConfig());
+    const stats = await svc.getFirstResponseStats(24);
+    expect(stats.totalResponded).toBe(1);
+    expect(stats.avgFirstResponseMs).toBeGreaterThan(0);
+    expect(stats.slaBreachedCount).toBe(2);
   });
 });
 
