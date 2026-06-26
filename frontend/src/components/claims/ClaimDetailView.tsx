@@ -25,6 +25,8 @@ function getStatusVariant(status: ClaimDetailResponse['metadata']['status']) {
       return 'success'
     case 'rejected':
       return 'destructive'
+    case 'appeal':
+      return 'warning'
     case 'pending':
     default:
       return 'info'
@@ -233,6 +235,53 @@ export function ClaimDetailView({ claimId }: ClaimDetailViewProps) {
           </CardContent>
         </Card>
 
+        {claim.metadata.status === 'appeal' && claim.appeal && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Appeal in progress</CardTitle>
+              <CardDescription>This claim is under appeal review with elevated quorum requirements.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="rounded-xl border bg-amber-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Appeal round</p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{claim.appeal.appealRound}</p>
+                </div>
+                <div className="rounded-xl border bg-amber-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Elevated quorum</p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">
+                    {(claim.appeal.elevatedQuorumBps / 100).toFixed(2)}%
+                  </p>
+                  <p className="text-xs text-muted-foreground">{claim.appeal.elevatedQuorumBps} bps</p>
+                </div>
+                <div className="rounded-xl border bg-amber-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Appeal deadline ledger</p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums">{claim.appeal.appealVotingDeadlineLedger}</p>
+                </div>
+              </div>
+              {claim.appeal.appealVotingDeadlineTime && (
+                <div className="rounded-xl border bg-muted p-4">
+                  <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Appeal voting deadline</p>
+                  <p className="mt-1 text-sm font-medium">{formatTimestamp(claim.appeal.appealVotingDeadlineTime)}</p>
+                </div>
+              )}
+              <div className="rounded-xl border bg-muted p-4">
+                {latestLedger !== null ? (
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-medium text-muted-foreground">Time remaining for appeal vote</span>
+                    <DeadlineCountdown
+                      deadlineLedger={claim.appeal.appealVotingDeadlineLedger}
+                      currentLedger={latestLedger}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Fetching latest ledger…</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {claim.metadata.status === 'approved' && claim.dispute.disputeWindowOpen && (
           <Card>
             <CardHeader>
@@ -307,21 +356,47 @@ export function ClaimDetailView({ claimId }: ClaimDetailViewProps) {
         <Card>
           <CardHeader>
             <CardTitle>Status history</CardTitle>
-            <CardDescription>All recorded status transitions in chronological order.</CardDescription>
+            <CardDescription>On-chain status transitions with ledger numbers and estimated timestamps.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ol className="space-y-4" aria-label="Status history">
-              {claim.status_history.map((entry) => (
-                <li key={`${entry.status}-${entry.ledger}`} className="rounded-xl border bg-muted p-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-medium">{formatStatusLabel(entry.status)}</p>
-                      <p className="text-xs text-muted-foreground">Ledger {entry.ledger}</p>
+            <ol className="relative ml-3 border-l-2 border-gray-200" aria-label="Status timeline">
+              {claim.status_history.map((entry, index) => {
+                const isLatest = index === claim.status_history.length - 1
+                const variant = getStatusVariant(entry.status)
+                const dotColor =
+                  variant === 'success'
+                    ? 'bg-green-500'
+                    : variant === 'destructive'
+                      ? 'bg-red-500'
+                      : 'bg-blue-500'
+
+                return (
+                  <li key={`${entry.status}-${entry.ledger}`} className="relative mb-6 ml-6 last:mb-0">
+                    <span
+                      className={`absolute -left-[31px] flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-background ${dotColor}`}
+                      aria-hidden="true"
+                    />
+                    <div className={`rounded-lg border p-3 ${isLatest ? 'border-primary/30 bg-primary/5' : 'bg-muted'}`}>
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-2">
+                          <Badge variant={getStatusVariant(entry.status)}>
+                            {formatStatusLabel(entry.status)}
+                          </Badge>
+                          {isLatest && (
+                            <span className="text-xs font-medium text-primary">(Current)</span>
+                          )}
+                        </div>
+                        <time className="text-xs text-muted-foreground" dateTime={entry.timestamp}>
+                          {formatTimestamp(entry.timestamp)}
+                        </time>
+                      </div>
+                      <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                        Ledger #{entry.ledger.toLocaleString()}
+                      </p>
                     </div>
-                    <p className="text-xs text-muted-foreground">{formatTimestamp(entry.timestamp)}</p>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                )
+              })}
             </ol>
           </CardContent>
         </Card>

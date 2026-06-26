@@ -4,7 +4,7 @@ export const ClaimMetadataSchema = z.object({
   id: z.number(),
   policyId: z.string(),
   creatorAddress: z.string(),
-  status: z.enum(['pending', 'approved', 'paid', 'rejected']),
+  status: z.enum(['pending', 'approved', 'paid', 'rejected', 'appeal']),
   amount: z.string(),
   description: z.string().optional(),
   evidenceHash: z.string(),
@@ -49,9 +49,16 @@ export const ConsistencyMetadataSchema = z.object({
 })
 
 export const ClaimStatusHistoryEntrySchema = z.object({
-  status: z.enum(['pending', 'approved', 'paid', 'rejected']),
+  status: z.enum(['pending', 'approved', 'paid', 'rejected', 'appeal']),
   ledger: z.number(),
   timestamp: z.string(),
+})
+
+export const AppealInfoSchema = z.object({
+  appealRound: z.number(),
+  elevatedQuorumBps: z.number(),
+  appealVotingDeadlineLedger: z.number(),
+  appealVotingDeadlineTime: z.string().optional(),
 })
 
 export const DisputeInfoSchema = z.object({
@@ -68,15 +75,19 @@ export const ClaimDetailResponseSchema = z.object({
   quorum: QuorumSchema,
   deadline: DeadlineSchema,
   dispute: DisputeInfoSchema,
+  appeal: AppealInfoSchema.optional(),
   evidence: ClaimEvidenceSchema,
   consistency: ConsistencyMetadataSchema,
   status_history: z.array(ClaimStatusHistoryEntrySchema),
   voter_eligible: z.boolean(),
   userHasVoted: z.boolean().optional(),
   userVote: z.enum(['yes', 'no']).optional(),
+  payout_deadline_ledger: z.number().optional(),
 })
 
 export type DisputeInfo = z.infer<typeof DisputeInfoSchema>
+
+export type AppealInfo = z.infer<typeof AppealInfoSchema>
 
 export type ClaimDetailResponse = z.infer<typeof ClaimDetailResponseSchema>
 

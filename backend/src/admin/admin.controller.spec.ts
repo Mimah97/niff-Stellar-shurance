@@ -14,6 +14,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SolvencyMonitoringService } from '../maintenance/solvency-monitoring.service';
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminStatsService } from './admin-stats.service';
+import { SorobanService } from '../rpc/soroban.service';
+
+const mockSorobanService = {
+  simulateGetEvidenceLimits: jest.fn(),
+  invokeAdminSetEvidenceLimits: jest.fn(),
+};
 
 const mockAdminService = {
   enqueueReindex: jest.fn(),
@@ -88,6 +94,7 @@ describe('AdminController', () => {
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -402,6 +409,7 @@ describe('Admin Role Guard Enforcement', () => {
         },
         { provide: AdminStatsService, useValue: mockAdminStatsService },
         { provide: AdminTenantsService, useValue: mockAdminTenantsService },
+        { provide: SorobanService, useValue: mockSorobanService },
       ],
     })
       .overrideGuard(JwtAuthGuard)

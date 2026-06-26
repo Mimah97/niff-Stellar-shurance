@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWallet } from '@/hooks/use-wallet';
 import { useLatestLedger } from '@/hooks/use-latest-ledger';
@@ -34,6 +34,9 @@ export function PolicyDashboard() {
 
   const { total, pageIndex, hasNextPage, hasPrevPage, loading, error, goToPage, retry, applyOptimisticPolicy, mergedPolicies, entries: optimisticEntries, confirm: confirmOptimistic, rollback: rollbackOptimistic } =
     useOptimisticPolicies(address, network, status, sort);
+
+  const hasLoadedOnce = useRef(false);
+  if (!loading && !error) hasLoadedOnce.current = true;
 
   const policyGroups = useMemo(() => groupPoliciesByExpiry(mergedPolicies), [mergedPolicies]);
   const hasPolicies = mergedPolicies.length > 0;
@@ -105,7 +108,7 @@ export function PolicyDashboard() {
       )}
 
       {/* ── Content ─────────────────────────────────────────────────── */}
-      {loading ? (
+      {loading || (!hasLoadedOnce.current && !error) ? (
         <PolicyListSkeleton layout={layout} />
       ) : error ? (
         <PolicyErrorState message={error} onRetry={retry} />

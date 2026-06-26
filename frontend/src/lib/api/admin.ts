@@ -114,6 +114,33 @@ export interface AddAssetParams {
   decimals: number
 }
 
+// ── Governance Proposal Types ─────────────────────────────────────────────────
+
+export type ProposalStatus = 'active' | 'passed' | 'rejected' | 'executed'
+
+export interface GovernanceProposal {
+  id: string
+  title: string
+  description: string
+  proposer: string
+  status: ProposalStatus
+  parameterKey: string
+  currentValue: string
+  proposedValue: string
+  yesVotes: number
+  noVotes: number
+  quorumRequired: number
+  createdAt: string
+  votingDeadline: string
+}
+
+export interface CreateProposalParams {
+  title: string
+  description: string
+  parameterKey: string
+  proposedValue: string
+}
+
 // ── API calls ──────────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -205,5 +232,17 @@ export const adminApi = {
     apiFetch<void>(`${base()}/assets/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: authHeaders(jwt),
+    }),
+
+  listProposals: (jwt: string) =>
+    apiFetch<GovernanceProposal[]>(`${base()}/governance/proposals`, {
+      headers: authHeaders(jwt),
+    }),
+
+  createProposal: (jwt: string, params: CreateProposalParams) =>
+    apiFetch<GovernanceProposal>(`${base()}/governance/proposals`, {
+      method: 'POST',
+      headers: authHeaders(jwt),
+      body: JSON.stringify(params),
     }),
 }

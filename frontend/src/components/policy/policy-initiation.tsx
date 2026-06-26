@@ -207,9 +207,8 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
     })
   }
 
-  // quote.premium and quote.coverageAmount come from the API as minor-unit strings;
-  // decimals are read from the quote response (default 7 for XLM/stroops)
-  const tokenDecimals = (quote as QuoteResponse & { decimals?: number })?.decimals ?? 7
+  const tokenDecimals = quote?.tokenDecimals ?? 7
+  const tokenSymbol = quote?.tokenSymbol ?? 'XLM'
   const fmt = (raw: string | number) => formatTokenAmount(String(raw), tokenDecimals)
 
   const renderStepContent = () => {
@@ -228,13 +227,13 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
                   <div>
                     <Label>Premium</Label>
                     <div className="text-2xl font-bold text-primary">
-                      {fmt(quote.premiumXlm)} XLM
+                      {fmt(quote.premiumStroops)} {tokenSymbol}
                     </div>
                   </div>
                   <div>
                     <Label>Coverage Amount</Label>
                     <div className="text-2xl font-bold">
-                      {fmt(quote.premiumStroops)} stroops
+                      {quote.premiumStroops} stroops
                     </div>
                   </div>
                 </div>
@@ -375,15 +374,15 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span>Premium:</span>
-                      <span className="font-semibold">{quote ? fmt(quote.premiumXlm) : '0'} XLM</span>
+                      <span className="font-semibold">{quote ? fmt(quote.premiumStroops) : '0'} {tokenSymbol}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Network Fee:</span>
-                      <span className="font-semibold">0.01 XLM</span>
+                      <span className="font-semibold">0.01 {tokenSymbol}</span>
                     </div>
                     <div className="flex justify-between border-t pt-2">
                       <span>Total:</span>
-                      <span className="font-semibold">{quote ? fmt(Number(quote.premiumXlm) + 0.01) : '0.01'} XLM</span>
+                      <span className="font-semibold">{quote ? fmt(String(BigInt(quote.premiumStroops) + 10n ** BigInt(tokenDecimals) / 100n)) : '0.01'} {tokenSymbol}</span>
                     </div>
                   </div>
                 </div>
@@ -478,7 +477,7 @@ export function PolicyInitiation({ quoteId: propQuoteId }: PolicyInitiationProps
 
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium">Coverage:</span>
-                      <span className="font-semibold">{fmt(policy.coverageAmount)} XLM</span>
+                      <span className="font-semibold">{fmt(policy.coverageAmount)} {tokenSymbol}</span>
                     </div>
 
                     <div className="flex items-center justify-between">

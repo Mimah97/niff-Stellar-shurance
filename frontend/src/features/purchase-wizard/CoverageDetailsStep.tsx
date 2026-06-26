@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { QuoteFormSchema, type QuoteFormData } from '@/lib/schemas/quote'
 import { useWallet } from '@/features/wallet'
 import { RegionCombobox } from '@/components/ui/region-combobox'
+import { PolicyTypeSelector } from '@/components/policy/PolicyTypeSelector'
 
 interface Props {
   defaultValues: Partial<QuoteFormData>
@@ -71,19 +72,12 @@ export function CoverageDetailsStep({ defaultValues, onNext, onChange }: Props) 
       noValidate
     >
       <div className="space-y-1">
-        <Label htmlFor="policy_type">Policy Type</Label>
-        <select
-          id="policy_type"
-          className={`w-full h-11 rounded-md border bg-background px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${errors.policy_type ? 'border-destructive' : 'border-input'}`}
-          aria-describedby={errors.policy_type ? 'policy_type-error' : undefined}
-          {...register('policy_type')}
-        >
-          <option value="">Select a policy type…</option>
-          <option value="Auto">Auto</option>
-          <option value="Health">Health</option>
-          <option value="Property">Property</option>
-        </select>
-        <FieldError message={errors.policy_type?.message} />
+        <Label>Policy Type</Label>
+        <PolicyTypeSelector
+          value={watch('policy_type')}
+          onChange={(val) => setValue('policy_type', val as QuoteFormData['policy_type'], { shouldValidate: true })}
+          error={errors.policy_type?.message}
+        />
       </div>
 
       <div className="space-y-1">

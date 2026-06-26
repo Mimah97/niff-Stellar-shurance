@@ -15,6 +15,7 @@ Welcome. This guide takes you from a fresh clone to a passing CI run and an open
 7. [PR review process](#7-pr-review-process)
 8. [Good first issues](#8-good-first-issues)
 9. [Security rules](#9-security-rules)
+10. [Dependency update policy](#10-dependency-update-policy)
 
 ---
 
@@ -485,3 +486,51 @@ See [section 3](#3-contract-development-rust--soroban) for the refresh workflow.
 
 - A second engineer must review and approve any vector changes before merge.
 - Before tagging a release: run `npm run refresh-vectors` and confirm the diff is empty (or intentional), confirm `_meta.contractSemver` matches `Cargo.toml`, and update `contracts/deployment-registry.json` with the new wasm hash.
+
+---
+
+## 10. Dependency update policy
+
+### Cadence and automation
+
+Dependabot is configured to open automated PRs on a **weekly schedule** (every Monday). It targets the following ecosystems:
+
+| Ecosystem | Config location | Update scope |
+|-----------|----------------|--------------|
+| npm (backend) | `backend/package.json` | patch and minor |
+| npm (frontend) | `frontend/package.json` | patch and minor |
+| GitHub Actions | `.github/workflows/` | patch and minor |
+| Cargo (contracts / backend Rust) | `Cargo.toml` | patch and minor |
+
+Dependabot PRs that touch only patch or minor versions of non-contract dependencies are reviewed and merged by any team member without a formal review gate, provided all CI jobs pass.
+
+### Major version review gate
+
+Major version bumps (`X.0.0`) require:
+
+1. A dedicated PR titled `chore(deps): bump <package> from vN to vN+1`.
+2. Manual review of the package's migration guide and changelog.
+3. At least **one approving review** from a team member with ownership of the affected area (backend, frontend, or contracts).
+4. Confirmation that all CI jobs pass — especially the `golden-vectors` job if the bump touches any Soroban SDK.
+
+Do not batch multiple major bumps into a single PR; each major version upgrade must be independently reviewable and revertable.
+
+### Contract SDK pin policy
+
+The Soroban contract SDK and CLI are pinned to **exact versions** to prevent mid-sprint breakage from upstream changes to the WASM ABI or XDR encoding:
+
+- **`stellar-sdk` (npm):** pinned to an exact version in `frontend/package.json` and `backend/package.json` (no `^` or `~` prefix). Update only via a deliberate PR that also refreshes the golden vectors (`npm run refresh-vectors`) and updates `_meta.contractSemver` in `backend/src/soroban/golden-vectors.json`.
+- **`stellar-cli` (Cargo / CI):** pinned via `cargo install --locked stellar-cli --features opt`. The locked version is recorded in `Cargo.lock`; do not run `cargo update` on this crate without a corresponding golden-vector refresh.
+- **Rust toolchain:** `rust-toolchain.toml` (or `rustup override`) pins the channel to `stable` at a specific date. Update together with any contract SDK upgrade.
+
+Any PR that changes a pinned SDK version must include a golden-vector diff review (two approvals required — see [PR review process](#7-pr-review-process)).
+
+### Security patches
+
+`npm audit` and `cargo audit` run in CI. If a **high or critical** vulnerability is reported:
+
+1. Open a fix PR immediately, even outside the weekly window.
+2. If a non-breaking patch is available, merge it the same day.
+3. If the fix requires a major bump or a workaround, open a tracking issue and document the interim mitigation in `audit.toml` (Cargo) or via `npm audit fix --force` with a justification comment in the PR description.
+
+Never merge an `npm audit` or `cargo audit` suppression without a documented reason and an expiry date in the suppression entry.

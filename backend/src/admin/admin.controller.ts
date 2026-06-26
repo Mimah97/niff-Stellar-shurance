@@ -715,4 +715,62 @@ export class AdminController {
     res.setHeader('Content-Disposition', 'attachment; filename="policies.csv"');
     res.send(csv);
   }
+
+  // ── #929 Evidence limits ───────────────────────────────────────────────────
+
+  /**
+   * GET /admin/governance/evidence-limits
+   *
+   * Reads min_evidence_count and max_evidence_count from the contract via
+   * Soroban simulation. Requires SOLVENCY_SIMULATION_SOURCE_ACCOUNT to be set.
+   */
+  @Get('governance/evidence-limits')
+  @ApiOperation({ summary: 'Read evidence count limits from the contract (simulation)' })
+  async getEvidenceLimits() {
+    const source =
+      this.configService.get<string>('SOLVENCY_SIMULATION_SOURCE_ACCOUNT') ||
+      this.configService.get<string>('CLAIM_KEEPER_SOURCE_ACCOUNT');
+    if (!source) {
+      throw new BadRequestException({
+        code: 'SIMULATION_SOURCE_NOT_CONFIGURED',
+        message: 'SOLVENCY_SIMULATION_SOURCE_ACCOUNT is not set.',
+      });
+    }
+    return this.soroban.simulateGetEvidenceLimits({ sourceAccount: source });
+  }
+
+  /**
+   * PATCH /admin/governance/evidence-limits
+   *
+   * Updates min_evidence_count and max_evidence_count on-chain.
+   * Validation: min >= 0, max > 0, min <= max.
+   * Writes an immutable audit row.
+   */
+  @Patch('governance/evidence-limits')
+  @ApiOperation({ summary: 'Update evidence count limits on-chain' })
+  async setEvidenceLimits(
+    @Body() body: { min: number; max: number },
+    @Req() req: AdminRequest,
+  ) {
+    const min = Number(body.min);
+    const max = Number(body.max);
+    if (!Number.isInteger(min) || min < 0) {
+      throw new BadRequestException('min must be a non-negative integer');
+    }
+    if (!Number.isInteger(max) || max <= 0) {
+      throw new BadRequestException('max must be a positive integer');
+    }
+    if (min > max) {
+      throw new BadRequestException('min must not exceed max');
+    }
+    const result = await this.soroban.invokeAdminSetEvidenceLimits({ min, max });
+    const actor = req.user?.walletAddress ?? 'unknown';
+    await this.auditService.write({
+      actor,
+      action: 'admin_set_evidence_limits',
+      payload: { min, max, txHash: result.txHash },
+      ipAddress: req.ip,
+    });
+    return result;
+  }
 }

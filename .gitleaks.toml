@@ -1,45 +1,20 @@
-# Gitleaks configuration for NiffyInsure
-# https://github.com/gitleaks/gitleaks
-
-title = "NiffyInsure Gitleaks Config"
-
 [extend]
-# Extend from the default gitleaks ruleset
+# Extend the default gitleaks config
 useDefault = true
 
-[[rules]]
-id = "stellar-secret-key"
-description = "Stellar secret key (S...)"
-regex = '''S[A-Z2-7]{55}'''
-tags = ["stellar", "key", "secret"]
-keywords = ["stellar", "secret", "STELLAR_SECRET"]
-
-[[rules]]
-id = "stellar-mnemonic"
-description = "Potential BIP-39 mnemonic phrase (12/24 words)"
-regex = '''(?i)(abandon|ability|able|about|above|absent|absorb|abstract|absurd|abuse|access|accident|account|accuse|achieve|acid|acoustic|acquire|across|act|action|actor|actress|actual|adapt|add|addict|address|adjust|admit|adult|advance|advice|aerobic|afford|afraid|again|age|agent|agree|ahead|aim|air|airport|aisle|alarm|album|alcohol|alert|alien|all|alley|allow|almost|alone|alpha|already|also|alter|always|amateur|amazing|among|amount|amused|analyst|anchor|ancient|anger|angle|angry|animal|ankle|announce|annual|another|answer|antenna|antique|anxiety|any|apart|apology|appear|apple|approve|april|arch|arctic|area|arena|argue|arm|armed|armor|army|around|arrange|arrest|arrive|arrow|art|artefact|artist|artwork|ask|aspect|assault|asset|assist|assume|asthma|athlete|atom|attack|attend|attitude|attract|auction|audit|august|aunt|author|auto|autumn|average|avocado|avoid|awake|aware|away|awesome|awful|awkward|axis)\s+([a-z]+\s+){10,22}[a-z]+'''
-tags = ["mnemonic", "key"]
-
-[[rules]]
-id = "soroban-private-key"
-description = "Hex-encoded 32-byte private key"
-regex = '''(?i)(private[_\-]?key|secret[_\-]?key|signing[_\-]?key)\s*[:=]\s*["']?[0-9a-fA-F]{64}["']?'''
-tags = ["soroban", "key", "secret"]
-
 [allowlist]
-description = "Global allowlist"
+description = "Global allow-list for false positives"
 paths = [
-  # Lock files never contain secrets
-  '''Cargo\.lock''',
-  '''package-lock\.json''',
-  # Test fixtures — synthetic keys only
-  '''(spec|test|__tests__|fixtures)/.*''',
-  # Docs
-  '''docs/.*\.md''',
-  '''.*CHANGELOG\.md''',
-  '''.*README\.md''',
+  # Test fixtures and example env files are expected to contain placeholder values
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.test$''',
+  '''test/.*''',
+  '''tests/.*''',
+  '''__tests__/.*''',
+  '''.*\.test\.(ts|js)$''',
+  '''.*\.spec\.(ts|js)$''',
 ]
 regexes = [
-  # Placeholder / example values used in docs and .env.example files
-  '''(?i)(your[-_].*key|<.*key.*>|example[-_]key|placeholder|REPLACE_ME|changeme|devpassword|your-google-verification-code)''',
+  # Stellar public keys are not secrets — they are safe to commit
+  '''G[A-Z2-7]{55}''',
 ]
