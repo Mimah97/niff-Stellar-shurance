@@ -6,6 +6,8 @@ import { SupportService } from '../support/support.service';
 
 const RENEWALS_CACHE_KEY = 'admin:analytics:renewals:v1';
 const RENEWALS_CACHE_TTL = 600; // 10 minutes
+const POLICIES_CACHE_KEY_PREFIX = 'admin:analytics:policies:v1';
+const POLICIES_CACHE_TTL = 300; // 5 minutes
 
 export interface RenewalGroupStats {
   policyType: string;
@@ -32,6 +34,21 @@ export interface SupportAnalytics {
   totalResponded: number;
   slaBreachedCount: number;
   slaHours: number;
+  cachedAt: string;
+}
+
+export interface PolicyAnalyticsBreakdown {
+  policyType: string;
+  region: string;
+  coverageAmountBucket: string;
+  isActive: boolean;
+  count: number;
+}
+
+export interface PolicyAnalytics {
+  totalPolicies: number;
+  activePolicies: number;
+  breakdown: PolicyAnalyticsBreakdown[];
   cachedAt: string;
 }
 
@@ -171,5 +188,78 @@ export class AdminAnalyticsService {
       ...stats,
       cachedAt: new Date().toISOString(),
     };
+  }
+
+  async getPolicyAnalytics(tenantId?: string): Promise<PolicyAnalytics> {
+    const cacheKey = tenantId
+      ? `${POLICIES_CACHE_KEY_PREFIX}:${tenantId}`
+      : POLICIES_CACHE_KEY_PREFIX;
+
+    const cached = await this.redis.get<PolicyAnalytics>(cacheKey);
+    if (cached) return cached;
+
+    const result = await this.computePolicyAnalytics(tenantId);
+    await this.redis.set(cacheKey, result, POLICIES_CACHE_TTL);
+    return result;
+  }
+
+  private async computePolicyAnalytics(tenantId?: string): Promise<PolicyAnalytics> {
+    const where = tenantId ? { deletedAt: null, tenantId } : { deletedAt: null };
+
+    const policies = await this.prisma.policy.findMany({
+      where,
+      select: { coverageAmount: true, isActive: true, policyType: true, region: true },
+    });
+
+    const totalPolicies = policies.length;
+    const activePolicies = policies.filter((p) => p.isActive).length;
+
+    // Group policies by dimensions and bucket coverage amounts
+    const breakdown = new Map<string, number>();
+    for (const policy of policies) {
+      const bucket = this.bucketCoverageAmount(policy.coverageAmount);
+      const key = `${policy.policyType}|${policy.region}|${bucket}|${policy.isActive}`;
+      breakdown.set(key, (breakdown.get(key) ?? 0) + 1);
+    }
+
+    const breakdownArray: PolicyAnalyticsBreakdown[] = Array.from(breakdown.entries()).map(
+      ([key, count]) => {
+        const [policyType, region, coverageAmountBucket, isActive] = key.split('|');
+        return {
+          policyType,
+          region,
+          coverageAmountBucket,
+          isActive: isActive === 'true',
+          count,
+        };
+      },
+    );
+
+    return {
+      totalPolicies,
+      activePolicies,
+      breakdown: breakdownArray,
+      cachedAt: new Date().toISOString(),
+    };
+  }
+
+  private bucketCoverageAmount(amount: string): string {
+    const num = BigInt(amount);
+    const k = BigInt(1000) * BigInt(10000000); // 1K stroops (7 decimals)
+    const m = BigInt(1000000) * BigInt(10000000); // 1M stroops
+
+    if (num < k) return '< 1k';
+    if (num < BigInt(10) * k) return '1k - 10k';
+    if (num < BigInt(100) * k) return '10k - 100k';
+    if (num < m) return '100k - 1m';
+    if (num < BigInt(10) * m) return '1m - 10m';
+    return '> 10m';
+  }
+
+  async invalidatePolicyAnalyticsCache(tenantId?: string): Promise<void> {
+    const cacheKey = tenantId
+      ? `${POLICIES_CACHE_KEY_PREFIX}:${tenantId}`
+      : POLICIES_CACHE_KEY_PREFIX;
+    await this.redis.del(cacheKey);
   }
 }

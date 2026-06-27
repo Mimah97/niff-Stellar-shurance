@@ -146,3 +146,17 @@ groups:
             Redis connection errors have been observed for at least 2 minutes.
             Rate limiting is failing open and nonce-based auth will be rejected.
             Restore Redis connectivity immediately.
+
+      # ── Indexer ledger gap alert ────────────────────────────────────────────
+      - alert: IndexerLedgerGapHigh
+        expr: |
+          indexer_ledger_gap{app="niffyinsure-api"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Indexer ledger gap above 100 on {{ $labels.network }}"
+          description: >
+            Indexer has fallen {{ $value }} ledgers behind the network head.
+            Check queue processing and indexer service health.

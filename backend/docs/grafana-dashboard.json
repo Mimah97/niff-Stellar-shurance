@@ -194,6 +194,60 @@
           "legendFormat": "SLA ≤1s {{route}}"
         }
       ]
+    },
+    {
+      "id": 11,
+      "title": "Dead-Letter Queue (DLQ) Depth",
+      "description": "Number of failed jobs per queue. Alert fires when depth exceeds 10 for 5 minutes.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 48, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "custom": { "thresholdsStyle": { "mode": "line" } }
+        }
+      },
+      "targets": [
+    },
+    {
+      "id": 12,
+      "title": "Indexer Ledger Gap",
+      "description": "Gap between latest chain ledger and last processed ledger per network. Alert fires when gap > 100 for 10 minutes.",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 48, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 100 }
+            ]
+          },
+          "custom": { "thresholdsStyle": { "mode": "line" } }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "indexer_ledger_gap{app="niffyinsure-api"}",
+          "legendFormat": "{{network}}"
+        }
+      ]
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "bullmq_dlq_depth{app=\"niffyinsure-api\"}",
+          "legendFormat": "{{queue}}"
+        }
+      ]
     }
   ]
 }

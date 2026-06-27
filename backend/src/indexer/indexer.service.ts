@@ -15,6 +15,7 @@ import { tryNormalizeAddress } from '../common/utils/normalize-address';
 import { QuoteSimulationCacheService } from '../quote/quote-simulation-cache.service';
 import { ClaimSummaryCacheService } from '../claims/services/claim-summary-cache.service';
 import { VotePubSubService } from '../graphql/vote-pubsub.service';
+import { AdminAnalyticsService } from '../admin/admin-analytics.service';
 import { OutboundWebhookService } from '../webhooks/outbound-webhook.service';
 
 type IndexerTx = Prisma.TransactionClient;
@@ -101,6 +102,7 @@ export class IndexerService {
     @Optional() private readonly claimSummaryCache?: ClaimSummaryCacheService,
     @Optional() private readonly votePubSub?: VotePubSubService,
     @Optional() private readonly outboundWebhook?: OutboundWebhookService,
+    @Optional() private readonly adminAnalytics?: AdminAnalyticsService,
   ) {
     this.networkId = this.config.get<string>('STELLAR_NETWORK', 'testnet');
     this.gapThresholdLedgers = this.config.get<number>('INDEXER_GAP_ALERT_THRESHOLD_LEDGERS', 100);
@@ -156,10 +158,12 @@ export class IndexerService {
     }
 
     this.metrics?.recordIndexerLag({ network, lag: gap });
+    this.metrics?.recordIndexerLedgerGap({ network, gap: latestLedger - lastProcessed });
 
     if (lastProcessed >= latestLedger) {
       this.metrics?.recordIndexerLag({ network, lag: 0 });
       return { processed: 0, lag: 0 };
+      this.metrics?.recordIndexerLedgerGap({ network, gap: 0 });
     }
 
     const startLedger = lastProcessed + 1;
@@ -342,7 +346,7 @@ export class IndexerService {
       if (mainTopic === 'PolicyInitiated' || (mainTopic === 'policy' && subTopic === 'initiated')) {
         await this.handlePolicyInitiated(tx, dataNative, event);
       } else if (mainTopic === 'policy' && subTopic === 'renewed') {
-        await this.handlePolicyRenewed(tx, dataNative);
+        await this.handlePolicyRenewed(tx, dataNative, event);
       } else if (
         (mainTopic === 'claim' && subTopic === 'filed') ||
         (mainTopic === 'niffyinsure' && subTopic === 'claim_filed')
@@ -402,9 +406,10 @@ export class IndexerService {
         updatedAt: new Date(),
       },
     });
+    this.adminAnalytics?.invalidatePolicyAnalyticsCache(event.tenantId).catch(() => undefined);
   }
 
-  private async handlePolicyRenewed(tx: IndexerTx, data: EventPayload) {
+  private async handlePolicyRenewed(tx: IndexerTx, data: EventPayload, event: SorobanEvent) {
     const holder = tryNormalizeAddress(getStringValue(data.holder)) ?? getStringValue(data.holder);
     const id = `${holder}:${getNumberValue(data.policy_id)}`;
     await tx.policy.update({
@@ -414,6 +419,7 @@ export class IndexerService {
         updatedAt: new Date(),
       },
     });
+    this.adminAnalytics?.invalidatePolicyAnalyticsCache(event.tenantId).catch(() => undefined);
   }
 
   /**

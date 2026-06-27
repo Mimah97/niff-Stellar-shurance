@@ -761,6 +761,20 @@ export class AdminController {
   }
 
   /**
+   * GET /admin/analytics/policies
+   *
+   * Aggregated policy statistics by policyType, region, coverageAmount bucket,
+   * and isActive. Response is cached in Redis with a 5-minute TTL.
+   */
+  @Get('analytics/policies')
+  @MinAdminRole('viewer')
+  @ApiOperation({ summary: 'Policy analytics grouped by type, region, and coverage (5-min cache)' })
+  async getPolicyAnalytics(@Req() req: AdminRequest) {
+    const tenantId = req.user?.scope ?? (req.adminIdentity?.scopes?.[0] ?? undefined);
+    return this.adminAnalyticsService.getPolicyAnalytics(tenantId);
+  }
+
+  /**
    * GET /admin/claims/search
    *
    * Search claims with full-text search and filtering.
