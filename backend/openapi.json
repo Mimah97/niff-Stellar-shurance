@@ -623,6 +623,66 @@
           }
         }
       },
+      "ApiErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta",
+          "errors"
+        ],
+        "properties": {
+          "data": {
+            "type": "null"
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "statusCode",
+              "timestamp",
+              "path"
+            ],
+            "properties": {
+              "statusCode": {
+                "type": "integer",
+                "example": 400
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "path": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "code",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "example": "VALIDATION_ERROR"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "i18nKey": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
       "ApiError": {
         "type": "object",
         "required": [
@@ -647,7 +707,7 @@
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/ApiError"
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
             }
           }
         }
@@ -657,7 +717,7 @@
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/ApiError"
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
             }
           }
         }
@@ -675,7 +735,7 @@
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/ApiError"
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
             }
           }
         }
