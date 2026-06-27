@@ -34,6 +34,7 @@ export class MetricsService implements OnModuleInit {
 
   // ── Indexer / observability metrics ───────────────────────────────────────
   readonly indexerLag: client.Gauge<string>;
+  readonly indexerLedgerGap: client.Gauge<string>;
   readonly solvencyBufferStroops: client.Gauge<string>;
   readonly solvencyBufferThresholdStroops: client.Gauge<string>;
 
@@ -140,6 +141,7 @@ export class MetricsService implements OnModuleInit {
       labelNames: ['network'],
       registers: [this.registry],
     });
+    this.indexerLedgerGap = new client.Gauge({      name: 'indexer_ledger_gap',      help: 'Gap between latest chain ledger and last processed ledger',      labelNames: ['network'],      registers: [this.registry],    });
 
     this.solvencyBufferStroops = new client.Gauge({
       name: 'solvency_buffer_stroops',
@@ -322,6 +324,7 @@ export class MetricsService implements OnModuleInit {
   recordIndexerLag(opts: { network: string; lag: number }) {
     this.indexerLag.set({ network: opts.network }, opts.lag);
   }
+  recordIndexerLedgerGap(opts: { network: string; gap: number }) {    this.indexerLedgerGap.set({ network: opts.network }, opts.gap);  }
 
   recordSolvencyBuffer(opts: { tenant: string; bufferStroops: bigint }) {
     this.solvencyBufferStroops.set({ tenant: opts.tenant }, Number(opts.bufferStroops));

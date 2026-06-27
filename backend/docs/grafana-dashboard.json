@@ -215,6 +215,33 @@
         }
       },
       "targets": [
+    },
+    {
+      "id": 12,
+      "title": "Indexer Ledger Gap",
+      "description": "Gap between latest chain ledger and last processed ledger per network. Alert fires when gap > 100 for 10 minutes.",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 48, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 100 }
+            ]
+          },
+          "custom": { "thresholdsStyle": { "mode": "line" } }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "indexer_ledger_gap{app="niffyinsure-api"}",
+          "legendFormat": "{{network}}"
+        }
+      ]
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "expr": "bullmq_dlq_depth{app=\"niffyinsure-api\"}",

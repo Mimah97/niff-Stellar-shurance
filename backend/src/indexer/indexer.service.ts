@@ -158,10 +158,12 @@ export class IndexerService {
     }
 
     this.metrics?.recordIndexerLag({ network, lag: gap });
+    this.metrics?.recordIndexerLedgerGap({ network, gap: latestLedger - lastProcessed });
 
     if (lastProcessed >= latestLedger) {
       this.metrics?.recordIndexerLag({ network, lag: 0 });
       return { processed: 0, lag: 0 };
+      this.metrics?.recordIndexerLedgerGap({ network, gap: 0 });
     }
 
     const startLedger = lastProcessed + 1;
