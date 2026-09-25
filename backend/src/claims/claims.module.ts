@@ -12,6 +12,8 @@ import { ClaimDeadlineProcessorService } from './claim-deadline.processor.servic
 import { ClaimDeadlineBootstrap } from './claim-deadline.bootstrap';
 import { ClaimHistoryService } from './services/claim-history.service';
 import { AppealSimulationCacheService } from './services/appeal-simulation-cache.service';
+import { ClaimCommentsController } from './comments/claim-comments.controller';
+import { ClaimCommentsService } from './comments/claim-comments.service';
 import { RpcModule } from '../rpc/rpc.module';
 import { RateLimitModule } from '../rate-limit/rate-limit.module';
 import { TenantModule } from '../tenant/tenant.module';
@@ -39,7 +41,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     FeatureFlagsModule,
     NotificationsModule,
   ],
-  controllers: [ClaimsController],
+  controllers: [ClaimsController, ClaimCommentsController],
   providers: [
     ClaimsService,
     SanitizationService,
@@ -52,6 +54,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ClaimDeadlineBootstrap,
     ClaimHistoryService,
     AppealSimulationCacheService,
+    ClaimCommentsService,
   ],
   exports: [
     ClaimsService,
@@ -59,6 +62,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ClaimAggregationService,
     ClaimSummaryCacheService,
     ClaimDeadlineProcessorService,
+    ClaimCommentsService,
   ],
 })
 export class ClaimsModule {}
