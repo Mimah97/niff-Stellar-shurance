@@ -92,6 +92,114 @@ groups:
             The contract solvency buffer has fallen below the configured safety
             threshold. Investigate approved obligations and treasury balance.
 
+      # ── Solvency ratio alerts (maintenance solvency monitor) ──────────────
+      # The solvency monitor job reads treasury and reserved coverage from the
+      # contract and exposes solvency_ratio (treasury / reserved coverage).
+      # Warning fires below the warning threshold; critical below the critical
+      # threshold. Thresholds are configurable via SOLVENCY_WARNING_RATIO and
+      # SOLVENCY_CRITICAL_RATIO and exported as solvency_warning_ratio /
+      # solvency_critical_ratio.
+      - alert: SolvencyRatioWarning
+        expr: |
+          solvency_ratio{app="niffyinsure-api"} < solvency_warning_ratio{app="niffyinsure-api"}
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Solvency ratio below warning threshold"
+          description: >
+            The on-chain solvency ratio (treasury / reserved coverage) is
+            {{ $value | humanizePercentage }}, below the warning threshold.
+            Review approved obligations and treasury balance.
+
+      - alert: SolvencyRatioCritical
+        expr: |
+          solvency_ratio{app="niffyinsure-api"} < solvency_critical_ratio{app="niffyinsure-api"}
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Solvency ratio below critical threshold"
+          description: >
+            The on-chain solvency ratio (treasury / reserved coverage) is
+            {{ $value | humanizePercentage }}, below the critical threshold.
+            Immediate action required: halt new approvals and top up treasury.
+
+      # ── Solvency monitor job failure alert ────────────────────────────────
+      - alert: SolvencyMonitorJobFailed
+        expr: |
+          increase(maintenance_job_failures_total{app="niffyinsure-api",job="solvency_monitor"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Solvency monitor job failed"
+          description: >
+            The solvency monitor maintenance job has failed at least once in
+            the last 15 minutes. Check job logs and contract RPC connectivity.
+
+      # ── Data retention job alerts ─────────────────────────────────────────
+      - alert: RetentionJobFailed
+        expr: |
+          increase(maintenance_job_failures_total{app="niffyinsure-api",job="data_retention"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Data retention job failed"
+          description: >
+            The data retention maintenance job has failed at least once in the
+            last 15 minutes. Records past their retention period may not be
+            purged or anonymized. Check job logs.
+
+      # ── Pin check job alerts ──────────────────────────────────────────────
+      - alert: PinCheckJobFailed
+        expr: |
+          increase(maintenance_job_failures_total{app="niffyinsure-api",job="pin_check"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Pin check job failed"
+          description: >
+            The IPFS pin check maintenance job has failed at least once in the
+            last 15 minutes. Evidence CIDs may be unpinned. Check job logs and
+            IPFS gateway health.
+
+      - alert: PinCheckMissingPins
+        expr: |
+          increase(pin_check_missing_total{app="niffyinsure-api"}[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Missing IPFS pins detected"
+          description: >
+            The pin check job found {{ $value }} evidence CID(s) missing from
+            IPFS in the last hour. Re-pin attempts are made automatically;
+            investigate if the count keeps growing.
+
+      # ── Privacy request job alerts ────────────────────────────────────────
+      - alert: PrivacyRequestJobFailed
+        expr: |
+          increase(maintenance_job_failures_total{app="niffyinsure-api",job="privacy_requests"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Privacy request job failed"
+          description: >
+            The privacy request maintenance job has failed at least once in the
+            last 15 minutes. Export or delete requests may be stuck. Check job
+            logs and the privacy_requests table.
+
       # ── Dead-letter queue depth alert ─────────────────────────────────────
       - alert: DlqDepthHigh
         expr: |
