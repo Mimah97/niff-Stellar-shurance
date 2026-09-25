@@ -33,6 +33,19 @@ interface RampPurchaseCompletedPayload {
   };
 }
 
+interface RampInteractiveFlowDto {
+  account?: string;
+  assetCode?: string;
+  amount?: string;
+  region?: string;
+}
+
+interface RampInteractiveFlowResponse {
+  transactionId: string;
+  interactiveUrl: string;
+  status: 'PENDING';
+}
+
 @Controller('ramp')
 export class RampController {
   private readonly logger = new Logger(RampController.name);
@@ -59,6 +72,28 @@ export class RampController {
     url.searchParams.set('utm_campaign', this.config.get<string>('RAMP_UTM_CAMPAIGN', 'onramp'));
 
     return { url: url.toString() };
+  }
+
+  /**
+   * Start a SEP-24 interactive deposit (fiat -> crypto).
+   * Returns the anchor's interactive URL for the client to open.
+   */
+  @Post('deposit')
+  @HttpCode(201)
+  @Feature(RAMP_FEATURE_FLAG)
+  startDeposit(@Body() dto: RampInteractiveFlowDto): RampInteractiveFlowResponse {
+    return this.startInteractiveFlow('deposit', dto);
+  }
+
+  /**
+   * Start a SEP-24 interactive withdraw (crypto -> fiat).
+   * Returns the anchor's interactive URL for the client to open.
+   */
+  @Post('withdraw')
+  @HttpCode(201)
+  @Feature(RAMP_FEATURE_FLAG)
+  startWithdraw(@Body() dto: RampInteractiveFlowDto): RampInteractiveFlowResponse {
+    return this.startInteractiveFlow('withdraw', dto);
   }
 
   /**
@@ -108,6 +143,46 @@ export class RampController {
     }
 
     return { received: true };
+  }
+
+  private startInteractiveFlow(
+    kind: 'deposit' | 'withdraw',
+    dto: RampInteractiveFlowDto,
+  ): RampInteractiveFlowResponse {
+    const region = (dto.region ?? '').toUpperCase();
+    const allowedRegions = (this.config.get<string>('RAMP_ALLOWED_REGIONS') ?? '')
+      .split(',')
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (allowedRegions.length > 0 && !allowedRegions.includes(region)) {
+      throw new NotFoundException('Ramp not available in your region');
+    }
+
+    const baseUrl = this.config.get<string>('RAMP_URL');
+    if (!baseUrl) {
+      throw new BadRequestException('Ramp anchor is not configured');
+    }
+
+    const url = new URL(baseUrl);
+    url.searchParams.set('flow', kind);
+    if (dto.account) {
+      url.searchParams.set('account', dto.account);
+    }
+    if (dto.assetCode) {
+      url.searchParams.set('asset_code', dto.assetCode);
+    }
+    if (dto.amount) {
+      url.searchParams.set('amount', dto.amount);
+    }
+    url.searchParams.set('utm_source', this.config.get<string>('RAMP_UTM_SOURCE', 'niffyinsure'));
+    url.searchParams.set('utm_medium', this.config.get<string>('RAMP_UTM_MEDIUM', 'app'));
+    url.searchParams.set('utm_campaign', kind === 'deposit' ? 'onramp' : 'offramp');
+
+    const transactionId = `${kind}-${Date.now()}`;
+    this.logger.log(`Ramp ${kind} started: transactionId=${transactionId} region=${region || 'n/a'}`);
+
+    return { transactionId, interactiveUrl: url.toString(), status: 'PENDING' };
   }
 
   private verifySignature(rawBody: Buffer | undefined, signature: string | undefined): void {
