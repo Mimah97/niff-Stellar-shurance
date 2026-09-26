@@ -91,6 +91,25 @@ Appeal baselines: `backend/docs/perf/appeal-baseline-2026-08-29.md`.
 Thresholds are enforced in each script's `thresholds` block. k6 exits with
 code 99 when a threshold is breached, which fails the CI job.
 
+## CI usage
+
+Load tests are **not** part of `npm test` (the unit/integration/e2e Jest
+projects). They run as a separate, opt-in CI job against staging so a clean
+checkout with Docker never depends on a live environment.
+
+```bash
+# CI job: loadtest-staging (manual / scheduled, staging only)
+BASE_URL=$STAGING_BASE_URL \
+TEST_JWT=$STAGING_TEST_JWT \
+  k6 run --out json=loadtests/results/$(date +%F).json loadtests/smoke.js
+```
+
+- The job is gated on `STAGING_BASE_URL` and `STAGING_TEST_JWT` being present;
+  it is skipped (not failed) when they are absent.
+- A breached threshold exits k6 with code 99 and fails the job, matching the
+  table above.
+- Results are uploaded as a build artifact and summarised in `docs/perf/`.
+
 ## Reports
 
 Dated reports are stored in `docs/perf/`. Each report includes:

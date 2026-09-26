@@ -27,6 +27,35 @@ export function parseOrigins(raw: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Builds the OpenAPI document from the running application. Exported so the
+ * `openapi:generate` script can reuse the exact same configuration as the
+ * runtime Swagger UI, keeping the committed spec in sync with the code.
+ */
+export function buildOpenApiDocument(app: Parameters<typeof SwaggerModule.createDocument>[0]) {
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle("NiffyInsure Backend")
+    .setDescription("Stellar insurance API")
+    .setVersion("0.1.0")
+    .addBearerAuth(
+      { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      "JWT-auth",
+    )
+    .addApiKey(
+      {
+        type: "apiKey",
+        in: "header",
+        name: "x-tenant-id",
+        description:
+          "Optional tenant identifier for white-label / multi-tenant deployments. " +
+          "Omit in single-tenant mode. Value: 3–64 lowercase alphanumeric + hyphens.",
+      },
+      "tenant-id",
+    )
+    .build();
+  return SwaggerModule.createDocument(app, swaggerConfig);
+}
+
 async function assertRpcPassphrase(networkConfig: ReturnType<typeof loadNetworkConfig>): Promise<void> {
   const startupLogger = new Logger('NetworkAssertion');
   try {
@@ -155,29 +184,11 @@ async function bootstrap() {
   // Exception filter
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  // Swagger
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle("NiffyInsure Backend")
-    .setDescription("Stellar insurance API")
-    .setVersion("0.1.0")
-    .addBearerAuth(
-      { type: "http", scheme: "bearer", bearerFormat: "JWT" },
-      "JWT-auth",
-    )
-    .addApiKey(
-      {
-        type: "apiKey",
-        in: "header",
-        name: "x-tenant-id",
-        description:
-          "Optional tenant identifier for white-label / multi-tenant deployments. " +
-          "Omit in single-tenant mode. Value: 3–64 lowercase alphanumeric + hyphens.",
-      },
-      "tenant-id",
-    )
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup("docs", app, document);
+  // Swagger — UI is disabled in production (spec is still generated for tooling).
+  const document = buildOpenApiDocument(app);
+  if (!isProduction) {
+    SwaggerModule.setup("docs", app, document);
+  }
 
   const port = configService.get<number>("PORT") || 3000;
 
@@ -186,7 +197,9 @@ async function bootstrap() {
     `🚀 Application is running on: http://localhost:${port}/api/v1`,
     "Bootstrap",
   );
-  Logger.log(`📚 Swagger docs: http://localhost:${port}/docs`, "Bootstrap");
+  if (!isProduction) {
+    Logger.log(`📚 Swagger docs: http://localhost:${port}/docs`, "Bootstrap");
+  }
   const graphqlEnabled = configService.get<boolean>('GRAPHQL_ENABLED', true);
   if (graphqlEnabled) {
     const graphqlPath = configService.get<string>('GRAPHQL_PATH', '/graphql');
